@@ -891,7 +891,7 @@ export default function App() {
                         
                         <div className="flex bg-white border border-gray-300 rounded-sm overflow-hidden">
                             <button onClick={() => setAbsenceMode('INTERA')} className={`flex-1 text-xs py-1.5 font-semibold ${absenceMode === 'INTERA' ? 'bg-[#1bc3c0] text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Tutto il giorno</button>
-                            <button onClick={() => setAbsenceMode('PARZIALE')} className={`flex-1 text-xs py-1.5 font-semibold ${absenceMode === 'PARZIALE' ? 'bg-[#1bc3c0] text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Assemblea / Permesso</button>
+                            <button onClick={() => setAbsenceMode('PARZIALE')} className={`flex-1 text-xs py-1.5 font-semibold ${absenceMode === 'PARZIALE' ? 'bg-[#1bc3c0] text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Permesso Orario</button>
                         </div>
 
                         {absenceMode === 'PARZIALE' && (
