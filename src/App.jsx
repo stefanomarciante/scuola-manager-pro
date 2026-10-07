@@ -22,6 +22,9 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'orario-scuola-demo';
 
+// ============================================================================
+// 🏫 IMPOSTAZIONI PLESSI E CLASSI
+// ============================================================================
 const PLESSI_LIST = [
   "NICOLOSI",
   "PEDARA",
@@ -30,9 +33,6 @@ const PLESSI_LIST = [
   "PATERNO'"
 ];
 
-// ============================================================================
-// 🗺️ MAPPA CLASSI -> PLESSI (Modifica qui le tue classi!)
-// ============================================================================
 const MAPPA_CLASSI_PLESSI = {
   "PEDARA": ["1C", "2C", "3C CUC", "4C CUC", "5C CUC"],
   "TRECASTAGNI": ["1D", "2D", "3D CUC", "4D CUC", "5D CUC", "3B SALA", "4B SALA", "5B SALA"],
@@ -40,9 +40,8 @@ const MAPPA_CLASSI_PLESSI = {
   "PATERNO'": ["1I", "1B S", "2I", "2L", "3F CUC", "4F CUC", "5F CUC", "3D SALA", "4D SALA", "5D SALA"] 
 };
 
-
 // ============================================================================
-// 🔐 ACCOUNT ISTITUZIONALI RESPONSABILI (Firebase Auth)
+// 🔐 ACCOUNT ISTITUZIONALI RESPONSABILI
 // ============================================================================
 const RESPONSABILI_ACCOUNTS = {
   "vicepresidenza@ipssatchinnicinicolosi.edu.it": { type: 'VICEPRESIDENZA', plesso: 'TUTTI', nome: 'Vicepresidenza / Dirigenza' },
@@ -54,8 +53,15 @@ const RESPONSABILI_ACCOUNTS = {
   "la.tua.email@esempio.it": { type: 'VICEPRESIDENZA', plesso: 'TUTTI', nome: 'Prof. Stefano (Admin)' },
 };
 
+// --- COLORI STILE ARGO ---
+const ARGO_CYAN = "#1bc3c0";
+const ARGO_GREEN = "#8cc63f";
+
+// ============================================================================
+// LOGICA DI ASSEGNAZIONE PLESSO
+// ============================================================================
 const determinaPlessoDaClasse = (classeStr) => {
-  if (!classeStr) return "NICOLOSI";
+  if (!classeStr) return null; // Ora restituisce null se non trova la classe
   const classeClean = classeStr.toUpperCase().replace(/\s+/g, '');
 
   for (const [plesso, classiArray] of Object.entries(MAPPA_CLASSI_PLESSI)) {
@@ -66,7 +72,7 @@ const determinaPlessoDaClasse = (classeStr) => {
       }
     }
   }
-  return "NICOLOSI"; 
+  return null; 
 };
 
 const cleanStr = (str) => {
@@ -149,7 +155,7 @@ export default function App() {
 
   const loadDatabaseFromCloud = async () => {
     setIsSyncing(true);
-    setDbMessage("Sincronizzazione orari e contatti in corso...");
+    setDbMessage("Lettura orari da Firebase...");
     try {
       const masterRef = doc(db, 'artifacts', appId, 'public', 'data', 'orari', 'plessi_master');
       const masterSnap = await getDoc(masterRef);
@@ -175,10 +181,9 @@ export default function App() {
           setContactsDB(contactsSnap.data().directory || {});
       }
 
-      setDbMessage(`✅ Sincronizzato! ${fullDb.length} ore in memoria.`);
+      setDbMessage(`✅ Orari caricati: ${fullDb.length} record presenti.`);
     } catch (error) {
-      console.error(error);
-      setDbMessage("Errore cloud: " + error.message);
+      setDbMessage("Errore caricamento: " + error.message);
     } finally {
       setIsSyncing(false);
     }
@@ -204,14 +209,38 @@ export default function App() {
     }
   };
 
+  const svuotaDatabaseAssoluto = async () => {
+      setIsSyncing(true);
+      setDbMessage("Eliminazione totale da Firestore in corso...");
+      try {
+        let batch = writeBatch(db);
+        // Cancelliamo i chunk
+        for (let i = 0; i < 20; i++) {
+           const oldChunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'orari', `plessi_chunk_${i}`);
+           batch.delete(oldChunkRef);
+        }
+        // Cancelliamo il master
+        const masterRef = doc(db, 'artifacts', appId, 'public', 'data', 'orari', 'plessi_master');
+        batch.delete(masterRef);
+        
+        await batch.commit();
+        setScheduleDB([]);
+        setDbMessage("✅ Database svuotato completamente.");
+      } catch(e) {
+          alert("Errore durante lo svuotamento: " + e.message);
+          setDbMessage("Errore: " + e.message);
+      } finally {
+          setIsSyncing(false);
+      }
+  };
+
   const saveDatabaseToCloud = async (newScheduleArray) => {
     setIsSyncing(true);
-    setDbMessage("Salvataggio nel Cloud in corso (Eliminazione vecchi dati e Chunking)...");
+    setDbMessage("Salvataggio nel Cloud in corso (Eliminazione e Ricaricamento)...");
     try {
       let batch = writeBatch(db);
 
-      // PULIZIA PROFONDA: Elimina fisicamente i vecchi pacchetti da Firestore per evitare ingorghi
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 20; i++) {
          const oldChunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'orari', `plessi_chunk_${i}`);
          batch.delete(oldChunkRef);
       }
@@ -232,10 +261,9 @@ export default function App() {
       setScheduleDB(newScheduleArray);
       setDbMessage(`✅ Salvataggio completato! (${newScheduleArray.length} record)`);
     } catch (error) {
-      console.error(error);
       const errMsg = "Errore critico di salvataggio Firestore: " + error.message;
       setDbMessage(errMsg);
-      alert(errMsg); // Pop-up visibile se ci sono permessi errati
+      alert(errMsg); 
     } finally {
       setIsSyncing(false);
     }
@@ -249,7 +277,6 @@ export default function App() {
           setDbMessage("✅ Rubrica contatti aggiornata con successo.");
           setEditingContact(false);
       } catch (error) {
-          console.error("Errore salvataggio contatti:", error);
           setDbMessage("Errore salvataggio contatti.");
       }
   };
@@ -288,7 +315,9 @@ export default function App() {
       const updatedDb = scheduleDB.map(item => {
           if(item.id === id) {
               const newClass = editValue.toUpperCase();
-              return { ...item, classe: newClass, plesso: determinaPlessoDaClasse(newClass) };
+              let plessoCalc = determinaPlessoDaClasse(newClass);
+              if(!plessoCalc) plessoCalc = "NICOLOSI";
+              return { ...item, classe: newClass, plesso: plessoCalc };
           }
           return item;
       });
@@ -303,7 +332,6 @@ export default function App() {
     
     Papa.parse(file, {
       skipEmptyLines: true,
-      // RIMOSSO worker: true per evitare blocchi silenti del browser su Mac/Vercel
       complete: (results) => {
         try {
           const extractedSlots = processParsedGrid(results.data, ruolo);
@@ -335,6 +363,7 @@ export default function App() {
     });
   };
 
+  // ALGORITMO EREDITÀ PLESSO PER POTENZIAMENTO E DISPOSIZIONE
   const processParsedGrid = (rows, ruolo) => {
     if (rows.length < 2) throw new Error("File CSV troppo corto o vuoto.");
     let maxCols = 0;
@@ -385,6 +414,7 @@ export default function App() {
         if(rows[i] === intestazioneOre) { startRow = i + 1; break; }
     }
 
+    // Passaggio 1: Estrazione base
     for (let i = startRow; i < rows.length; i++) {
       const row = rows[i];
       if (!row || row.length <= 0) continue;
@@ -403,6 +433,12 @@ export default function App() {
           const mapping = columnMapping[j] || { giorno: lastKnownDay, ora: `Col-${j}` };
           const classeFormattata = cellContent.toUpperCase();
           
+          let tipologiaCalc = 'LEZIONE';
+          if (classeFormattata.includes('DISP') || classeFormattata === 'D') tipologiaCalc = 'A DISPOSIZIONE';
+          else if (classeFormattata.includes('POT') || classeFormattata === 'P') tipologiaCalc = 'POTENZIAMENTO';
+          
+          let plessoCalc = determinaPlessoDaClasse(classeFormattata); // null se non trova la classe
+          
           flatList.push({
             id: crypto.randomUUID(),
             docente: docente,
@@ -410,12 +446,34 @@ export default function App() {
             ora: mapping.ora,
             classe: classeFormattata, 
             ruolo: ruolo, 
-            tipologia: classeFormattata.includes('DISP') ? 'A DISPOSIZIONE' : (classeFormattata.includes('POT') ? 'POTENZIAMENTO' : 'LEZIONE'),
-            plesso: determinaPlessoDaClasse(classeFormattata)
+            tipologia: tipologiaCalc,
+            plesso: plessoCalc 
           });
         }
       }
     }
+
+    // Passaggio 2: Eredità Plesso Algoritmica
+    flatList.forEach(slot => {
+        if (slot.plesso === null) {
+            // Cerca lezioni dello stesso docente nello stesso giorno che hanno un plesso definito
+            const oreStessoGiorno = flatList.filter(s => 
+                s.docente === slot.docente && 
+                s.giorno === slot.giorno && 
+                s.id !== slot.id && 
+                s.plesso !== null
+            );
+            
+            // Prendi il plesso della prima lezione trovata in quel giorno
+            if (oreStessoGiorno.length > 0) {
+                slot.plesso = oreStessoGiorno[0].plesso;
+            } else {
+                // Se non ha lezioni in nessun plesso quel giorno, default alla Centrale
+                slot.plesso = "NICOLOSI";
+            }
+        }
+    });
+
     return flatList;
   };
 
@@ -468,7 +526,7 @@ export default function App() {
                   id_cand: `${slotCorrente.docente}-SOST`,
                   docente: slotCorrente.docente,
                   ruoloCandidato: slotCorrente.ruolo,
-                  motivazione: `Compresenza: è già in ${slotCorrente.classe} (${slotCorrente.ruolo})`,
+                  motivazione: `Compresenza: è in ${slotCorrente.classe}`,
                   score: 100
               });
           } 
@@ -490,7 +548,7 @@ export default function App() {
                   id_cand: `${doc}-LIBERO`,
                   docente: doc,
                   ruoloCandidato: 'CURRICULARE',
-                  motivazione: `Libero (Buco Orario / Ora a pagamento)`,
+                  motivazione: `Libero (Possibile Buco Orario)`,
                   score: 50
               });
           }
@@ -506,8 +564,8 @@ export default function App() {
   };
 
   const assignSubstitute = async (candidato) => {
-      let modalitaBreve = "Ore Eccedenti (a pagamento)";
-      if (candidato.score === 100) modalitaBreve = "Compresenza / Sostegno";
+      let modalitaBreve = "Ore Eccedenti";
+      if (candidato.score === 100) modalitaBreve = "Compresenza";
       else if (candidato.score === 80) modalitaBreve = candidato.motivazione; 
 
       const newLog = {
@@ -534,7 +592,7 @@ export default function App() {
   };
 
   const inviaNotificaVirtual = (log, metodo) => {
-      const testoMessaggio = `*Disposizione Sostituzione - IPSAT Chinnici*\nGentile Prof. ${log.docente_sostituto},\n\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\nModalità: ${log.modalita}\n\nFirma: ${log.responsabile_firma}`;
+      const testoMessaggio = `*Sostituzione - IPSAT Chinnici*\n\nGentile Prof. ${log.docente_sostituto},\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\n\nFirma: ${log.responsabile_firma}`;
       
       const contatti = contactsDB[log.docente_sostituto] || {};
       const telefono = contatti.telefono ? contatti.telefono.replace(/\s+/g, '') : '';
@@ -544,12 +602,12 @@ export default function App() {
           if (telefono) window.open(`https://wa.me/${telefono}?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
           else window.open(`https://wa.me/?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
       } else if (metodo === 'mail') {
-          const subject = encodeURIComponent(`Disposizione Sostituzione: ${log.giorno} - ${log.ora}`);
+          const subject = encodeURIComponent(`Sostituzione: ${log.giorno} - ${log.ora}`);
           const body = encodeURIComponent(testoMessaggio);
           window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
       } else if (metodo === 'copy') {
           navigator.clipboard.writeText(testoMessaggio).then(() => {
-              alert("✅ Testo copiato! Ora incollalo dove preferisci.");
+              alert("✅ Testo copiato!");
           });
       }
   };
@@ -568,105 +626,117 @@ export default function App() {
   const totalPages = Math.ceil(filteredDbRows.length / itemsPerPage) || 1;
   const paginatedDbRows = filteredDbRows.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  return (
-    <div className="min-h-screen bg-gray-50 font-sans text-gray-800 print:bg-white print:m-0">
-      
-      {showLoginModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-gray-100">
-            <h3 className="text-xl font-bold text-blue-950 mb-2">Accesso Istituzionale</h3>
-            <p className="text-sm text-gray-600 mb-6">Inserisci l'indirizzo email istituzionale e la password per accedere come responsabile.</p>
-            
-            <input 
-              type="email" 
-              placeholder="Email (es. prof@ipssat...)" 
-              className="w-full p-3 border-2 border-blue-300 rounded-xl mb-3 focus:border-blue-600 outline-none font-medium"
-              value={loginEmail}
-              onChange={(e) => setLoginEmail(e.target.value)}
-              autoFocus
-            />
-            <input 
-              type="password" 
-              placeholder="Password" 
-              className="w-full p-3 border-2 border-blue-300 rounded-xl mb-6 focus:border-blue-600 outline-none"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-            />
 
-            <div className="flex gap-3">
-              <button onClick={() => setShowLoginModal(false)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold transition-all">Annulla</button>
-              <button onClick={handleLogin} className="flex-1 bg-blue-800 hover:bg-blue-900 text-white py-3 rounded-xl font-bold transition-all shadow-md">Accedi</button>
+  return (
+    <div className="min-h-screen bg-[#f5f5f5] font-sans text-gray-800 print:bg-white print:m-0">
+      
+      {/* ⚠️ MODALE LOGIN (Stile Argo) */}
+      {showLoginModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl p-8 max-w-md w-full shadow-lg border-t-4 border-[#1bc3c0]">
+            <div className="text-center mb-6">
+                <svg className="w-12 h-12 text-[#1bc3c0] mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <h3 className="text-2xl font-semibold text-gray-800">Accesso Profilo</h3>
+                <p className="text-sm text-gray-500 mt-1">Usa l'email istituzionale per la gestione</p>
+            </div>
+            
+            <div className="space-y-4">
+                <input 
+                  type="email" 
+                  placeholder="Email istituzionale (@ipssat...)" 
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-md focus:outline-none focus:border-[#1bc3c0] focus:ring-1 focus:ring-[#1bc3c0] transition-colors"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  autoFocus
+                />
+                <input 
+                  type="password" 
+                  placeholder="Password" 
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-md focus:outline-none focus:border-[#1bc3c0] focus:ring-1 focus:ring-[#1bc3c0] transition-colors"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                />
+            </div>
+
+            <div className="flex gap-3 mt-8">
+              <button onClick={() => setShowLoginModal(false)} className="flex-1 px-4 py-3 text-gray-600 bg-gray-100 hover:bg-gray-200 font-medium rounded-md transition-colors">Annulla</button>
+              <button onClick={handleLogin} className="flex-1 bg-[#8cc63f] hover:bg-[#7cb036] text-white py-3 rounded-md font-medium transition-colors">Accedi</button>
             </div>
           </div>
         </div>
       )}
 
-      <div className="bg-white border-b-4 border-blue-900 shadow-sm print:border-none print:shadow-none mb-6">
-        <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col md:flex-row items-center justify-between gap-6 print:justify-start">
+      {/* HEADER BIANCO STILE PORTALE */}
+      <div className="bg-white border-b border-gray-200 shadow-sm print:hidden sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row items-center justify-between gap-4">
           
-          <div className="flex items-center gap-6">
-            <img src="/logo alberghiero.png" alt="Logo Alberghiero" className="w-24 h-auto print:w-32 object-contain" onError={(e)=>{e.target.style.display='none'}} />
-            <div className="flex flex-col text-center md:text-left">
-              <h1 className="text-sm md:text-md font-bold text-blue-950 tracking-wide uppercase font-serif">
-                Istituto Professionale di Stato per i Servizi Alberghieri e Turistici
-              </h1>
-              <h2 className="text-2xl md:text-3xl font-extrabold text-blue-900 mt-0.5 tracking-tight">
-                Rocco Chinnici
+          <div className="flex items-center gap-4">
+            <img src="/logo alberghiero.png" alt="Logo" className="h-14 w-auto object-contain" onError={(e)=>{e.target.style.display='none'}} />
+            <div className="flex flex-col">
+              <h2 className="text-2xl font-bold text-gray-800 tracking-tight leading-none mb-1">
+                Scuola<span className="text-[#1bc3c0]">Manager</span> Pro
               </h2>
-              <h3 className="text-sm text-blue-800 font-semibold uppercase tracking-wider">
-                Nicolosi {userRole.plesso !== 'TUTTI' && `— Plesso: ${userRole.plesso}`}
-              </h3>
-              <div className="mt-3 pt-2 border-t border-gray-200 flex items-center gap-3">
-                <span className="text-xs uppercase tracking-widest bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-full inline-block shadow-xs">
-                  ScuolaManager Pro — Gestione Sostituzioni
-                </span>
-                {userRole.type === 'GUEST' ? (
-                    <button 
-                      onClick={() => setShowLoginModal(true)} 
-                      className="text-xs bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-1.5 rounded-full shadow-sm transition-all print:hidden"
-                    >
-                      🔒 Login Responsabili
-                    </button>
-                ) : (
-                    <button 
-                      onClick={handleLogout} 
-                      className="text-xs bg-gray-100 hover:bg-red-50 text-gray-700 hover:text-red-700 font-bold px-3 py-1.5 rounded-full border border-gray-300 transition-all print:hidden"
-                    >
-                      👤 {userRole.nome} (Esci)
-                    </button>
-                )}
+              <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Gestione Sostituzioni</span>
+                  <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                  <span className="text-xs font-bold text-[#8cc63f] uppercase tracking-wider">{userRole.plesso}</span>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap w-full md:w-auto gap-2 bg-gray-100 p-1.5 rounded-xl print:hidden">
-            <button onClick={() => setActiveTab('DASHBOARD')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'DASHBOARD' ? 'bg-blue-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'}`}>
-              Sostituzioni
-            </button>
-            <button onClick={() => setActiveTab('STORICO')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'STORICO' ? 'bg-blue-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'}`}>
-              Archivio Storico
-            </button>
-            {userRole.type === 'VICEPRESIDENZA' && (
-              <button onClick={() => setActiveTab('DATABASE')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'DATABASE' ? 'bg-blue-800 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'}`}>
-                Database Orari
-              </button>
-            )}
+          <div className="hidden sm:flex flex-col text-right">
+             <span className="text-sm font-bold text-gray-700 uppercase tracking-wide">I.P.S.S.A.T. Rocco Chinnici</span>
+             <span className="text-xs font-medium text-gray-500">Nicolosi • Pedara • Trecastagni • S.M. di Licodia • Paternò</span>
           </div>
+        </div>
+        
+        {/* MENU TABS SQUADRATO E PULSANTE LOGIN */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-2 flex flex-col sm:flex-row justify-between items-end gap-2">
+            <div className="flex gap-1 overflow-x-auto w-full sm:w-auto">
+                <button onClick={() => setActiveTab('DASHBOARD')} className={`px-6 py-3 font-medium text-sm transition-colors border-b-4 ${activeTab === 'DASHBOARD' ? 'border-[#1bc3c0] text-[#1bc3c0] bg-[#1bc3c0]/5' : 'border-transparent text-gray-600 hover:bg-gray-50 hover:border-gray-200'}`}>Sostituzioni del Giorno</button>
+                <button onClick={() => setActiveTab('STORICO')} className={`px-6 py-3 font-medium text-sm transition-colors border-b-4 ${activeTab === 'STORICO' ? 'border-[#1bc3c0] text-[#1bc3c0] bg-[#1bc3c0]/5' : 'border-transparent text-gray-600 hover:bg-gray-50 hover:border-gray-200'}`}>Archivio Storico</button>
+                {userRole.type === 'VICEPRESIDENZA' && (
+                  <button onClick={() => setActiveTab('DATABASE')} className={`px-6 py-3 font-medium text-sm transition-colors border-b-4 ${activeTab === 'DATABASE' ? 'border-[#1bc3c0] text-[#1bc3c0] bg-[#1bc3c0]/5' : 'border-transparent text-gray-600 hover:bg-gray-50 hover:border-gray-200'}`}>Gestione Dati</button>
+                )}
+            </div>
+
+            <div className="pb-1 sm:pb-2">
+               {userRole.type === 'GUEST' ? (
+                  <button onClick={() => setShowLoginModal(true)} className="flex items-center gap-2 text-sm bg-[#1bc3c0] hover:bg-[#15a5a2] text-white font-medium px-4 py-2 rounded-md transition-colors shadow-sm">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+                    ACCEDI AL PROFILO
+                  </button>
+              ) : (
+                  <div className="flex items-center gap-3 bg-gray-50 px-3 py-1.5 rounded-md border border-gray-200 shadow-sm">
+                      <span className="text-sm font-medium text-gray-700 hidden lg:block">Utente: <b>{userRole.nome}</b></span>
+                      <button onClick={handleLogout} className="text-gray-500 hover:text-red-500 text-sm font-bold transition-colors uppercase tracking-wide">Esci</button>
+                  </div>
+              )}
+            </div>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto p-4 md:p-8 print:p-0">
+      {/* CONTENITORE PRINCIPALE */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 print:p-0">
         
         {activeTab === 'DASHBOARD' && (
           <div className="space-y-6">
-            <div className="grid md:grid-cols-3 gap-6 print:hidden">
-              <div className="md:col-span-1 bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-fit">
-                <h2 className="text-lg font-bold text-gray-800 mb-4">1. Lista Docenti Assenti</h2>
-                <div className="space-y-4">
+            <div className="grid lg:grid-cols-3 gap-6 print:hidden">
+              
+              {/* PANNELLO SINISTRO: ASSENTI (Stile Widget) */}
+              <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-sm border border-gray-200 h-fit">
+                <div className="flex items-center gap-3 mb-6 border-b border-gray-100 pb-4">
+                    <div className="w-10 h-10 rounded-full bg-[#1bc3c0]/10 text-[#1bc3c0] flex items-center justify-center">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    </div>
+                    <h2 className="text-lg font-semibold text-gray-800">1. Lista Docenti Assenti</h2>
+                </div>
+                
+                <div className="space-y-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Giorno di Lavoro</label>
-                    <select className="w-full border-gray-300 rounded-md shadow-sm p-2 border bg-white focus:border-blue-500" value={targetDay} onChange={(e) => setTargetDay(e.target.value)}>
+                    <label className="block text-sm font-medium text-gray-600 mb-2">Giorno di Lavoro</label>
+                    <select className="w-full bg-white border border-gray-300 text-gray-800 rounded-md p-2.5 focus:outline-none focus:border-[#1bc3c0] transition-colors" value={targetDay} onChange={(e) => setTargetDay(e.target.value)}>
                       <option value="LUNEDI">Lunedì</option><option value="MARTEDI">Martedì</option><option value="MERCOLEDI">Mercoledì</option>
                       <option value="GIOVEDI">Giovedì</option><option value="VENERDI">Venerdì</option><option value="SABATO">Sabato</option>
                     </select>
@@ -674,25 +744,27 @@ export default function App() {
                   
                   {userRole.type !== 'GUEST' ? (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Aggiungi Assente (Cognome)</label>
+                    <label className="block text-sm font-medium text-gray-600 mb-2">Aggiungi Assente (Cognome)</label>
                     <div className="flex gap-2">
-                        <input type="text" placeholder="Es. ROSSI" className="flex-1 border-gray-300 rounded-md shadow-sm p-2 border uppercase" value={absentInput} onChange={(e) => setAbsentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAbsentTeacher()}/>
-                        <button onClick={addAbsentTeacher} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-bold shadow-sm">+</button>
+                        <input type="text" placeholder="Es. Rossi" className="flex-1 bg-white border border-gray-300 rounded-md p-2.5 uppercase focus:outline-none focus:border-[#1bc3c0] transition-colors" value={absentInput} onChange={(e) => setAbsentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAbsentTeacher()}/>
+                        <button onClick={addAbsentTeacher} className="bg-[#1bc3c0] hover:bg-[#15a5a2] text-white w-12 rounded-md font-bold flex items-center justify-center transition-colors">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                        </button>
                     </div>
                   </div>
                   ) : (
-                    <div className="p-3 bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-md text-sm font-medium">
-                      Effettua il login come responsabile per gestire le assenze.
+                    <div className="p-4 bg-orange-50 border border-orange-200 text-orange-800 rounded-md text-sm">
+                      Effettua l'accesso istituzionale per poter registrare le assenze.
                     </div>
                   )}
                   
                   {absentTeachers.length > 0 && (
-                      <div className="mt-4 border-t border-gray-100 pt-4 bg-gray-50 -mx-6 px-6 pb-6 rounded-b-xl">
-                          <h3 className="text-xs font-bold text-gray-500 uppercase mb-3">Assenti Registrati:</h3>
+                      <div className="mt-6 pt-5 border-t border-gray-100">
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Assenti Registrati:</label>
                           <div className="flex flex-wrap gap-2">
                               {absentTeachers.map(t => (
-                                  <span key={t} className="bg-red-50 border border-red-200 text-red-700 px-3 py-1.5 rounded-full text-sm font-bold flex items-center gap-2 shadow-sm">
-                                      {t} <button onClick={()=>removeAbsentTeacher(t)} className="text-red-400 hover:text-red-900 bg-white rounded-full w-5 h-5 flex items-center justify-center border border-red-100">×</button>
+                                  <span key={t} className="bg-white border border-red-200 text-red-600 px-3 py-1.5 rounded-full text-sm font-bold flex items-center gap-2">
+                                      {t} <button onClick={()=>removeAbsentTeacher(t)} className="text-red-400 hover:text-red-700 w-4 h-4 flex items-center justify-center rounded-full hover:bg-red-50 transition-colors">×</button>
                                   </span>
                               ))}
                           </div>
@@ -701,36 +773,44 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="md:col-span-2 space-y-6">
+              {/* PANNELLO CENTRALE/DESTRA: TABELLONE ORE */}
+              <div className="lg:col-span-2 space-y-6">
                 
+                {/* Modale Ricerca Candidato sovrapposto */}
                 {activeSlotSearch && (
-                   <div className="bg-blue-50 p-6 rounded-xl shadow-md border border-blue-200 border-l-4 border-l-blue-600">
+                   <div className="bg-white p-6 rounded-lg shadow-md border-l-4 border-[#1bc3c0] relative">
                        <div className="flex justify-between items-start mb-4">
                            <div>
-                               <h3 className="font-bold text-blue-900 text-lg">Ricerca per {activeSlotSearch.docente}</h3>
-                               <p className="text-sm text-blue-800">Ora: {activeSlotSearch.ora} | Classe scoperta: <span className="font-bold bg-white px-2 py-0.5 rounded shadow-sm">{activeSlotSearch.classe}</span></p>
+                               <h3 className="font-semibold text-gray-800 text-lg">Trova sostituto per: {activeSlotSearch.docente}</h3>
+                               <p className="text-sm text-gray-500">Ora: {activeSlotSearch.ora} | Classe: <span className="font-bold text-gray-700">{activeSlotSearch.classe}</span></p>
                            </div>
-                           <button onClick={()=>setActiveSlotSearch(null)} className="text-gray-400 hover:text-gray-700 font-bold text-xl">×</button>
+                           <button onClick={()=>setActiveSlotSearch(null)} className="text-gray-400 hover:text-gray-600">
+                               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                           </button>
                        </div>
                        
-                       <div className="max-h-[350px] overflow-y-auto border border-blue-100 rounded-lg bg-white shadow-sm">
-                         <table className="min-w-full divide-y divide-gray-200">
+                       <div className="max-h-[300px] overflow-y-auto border border-gray-200 rounded-md">
+                         <table className="min-w-full text-left text-sm">
                            <thead className="bg-gray-50 sticky top-0">
                              <tr>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-500">Candidato ({userRole.plesso})</th>
-                               <th className="px-4 py-3 text-left text-xs font-bold text-gray-500">Motivazione Priorità</th>
-                               <th className="px-4 py-3 text-right text-xs font-bold text-gray-500">Azione</th>
+                               <th className="px-4 py-2 font-medium text-gray-600 border-b border-gray-200">Docente Candidato</th>
+                               <th className="px-4 py-2 font-medium text-gray-600 border-b border-gray-200">Priorità Algoritmo</th>
+                               <th className="px-4 py-2 border-b border-gray-200"></th>
                              </tr>
                            </thead>
-                           <tbody className="divide-y divide-gray-100">
+                           <tbody className="divide-y divide-gray-100 bg-white">
                              {candidates.map((c, i) => (
-                               <tr key={i} className={`hover:bg-gray-50 ${c.score === 100 ? 'bg-green-50/30' : c.score === 80 ? 'bg-blue-50/20' : ''}`}>
-                                 <td className="px-4 py-3 font-bold text-gray-800">{c.docente}</td>
-                                 <td className="px-4 py-3 text-xs">
-                                     <span className={`px-2 py-1 rounded-md font-semibold ${c.score === 100 ? 'bg-green-100 text-green-800' : c.score === 80 ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700'}`}>{c.motivazione}</span>
+                               <tr key={i} className="hover:bg-gray-50">
+                                 <td className="px-4 py-3 font-semibold text-gray-800">{c.docente}</td>
+                                 <td className="px-4 py-3">
+                                     <span className={`px-2 py-1 rounded-sm text-xs font-semibold
+                                        ${c.score === 100 ? 'bg-green-100 text-green-800' : 
+                                          c.score === 80 ? 'bg-cyan-100 text-cyan-800' : 'bg-gray-100 text-gray-600'}`}>
+                                         {c.motivazione}
+                                     </span>
                                  </td>
                                  <td className="px-4 py-3 text-right">
-                                     <button onClick={() => assignSubstitute(c)} className="bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-3 py-1.5 rounded shadow-sm transition-colors">Assegna</button>
+                                     <button onClick={() => assignSubstitute(c)} className="bg-[#8cc63f] hover:bg-[#7cb036] text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors">Assegna</button>
                                  </td>
                                </tr>
                              ))}
@@ -740,38 +820,42 @@ export default function App() {
                    </div>
                 )}
 
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                   <h2 className="text-lg font-bold text-gray-800 mb-4">2. Tabellone Ore Scoperte ({targetDay})</h2>
+                <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200">
+                   <h2 className="text-lg font-semibold text-gray-800 mb-4 border-b border-gray-100 pb-2">2. Tabellone Ore Scoperte ({targetDay})</h2>
                    
                    {absentTeachers.length === 0 ? (
-                       <p className="text-sm text-gray-500 text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-200">Aggiungi un docente assente per vedere le ore da coprire in questa sede.</p>
+                       <div className="py-10 text-center text-gray-400 bg-gray-50 rounded-md border border-dashed border-gray-300">
+                           <p className="text-sm">Nessuna assenza inserita in Lista.</p>
+                       </div>
                    ) : getUncoveredSlots().length === 0 ? (
-                       <div className="bg-green-50 text-green-700 p-6 rounded-lg text-center font-bold border border-green-200 text-lg shadow-sm">✅ Tutte le ore di {targetDay} per {userRole.plesso} sono coperte!</div>
+                       <div className="bg-green-50 border border-green-200 p-6 rounded-md text-center text-green-800">
+                           <h4 className="font-bold text-lg">✅ Tutte le ore di {targetDay} per {userRole.plesso} sono coperte!</h4>
+                       </div>
                    ) : (
-                       <div className="overflow-x-auto border border-gray-200 rounded-lg shadow-sm">
-                           <table className="min-w-full divide-y divide-gray-200">
-                               <thead className="bg-gray-50">
+                       <div className="overflow-x-auto border border-gray-200 rounded-md">
+                           <table className="min-w-full text-left text-sm whitespace-nowrap">
+                               <thead className="bg-gray-50 border-b border-gray-200">
                                    <tr>
-                                       <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Ora</th>
-                                       <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Assente</th>
-                                       <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Classe (Plesso)</th>
-                                       <th className="px-4 py-3 text-right"></th>
+                                       <th className="px-4 py-3 font-medium text-gray-600">Fascia Oraria</th>
+                                       <th className="px-4 py-3 font-medium text-gray-600">Docente Assente</th>
+                                       <th className="px-4 py-3 font-medium text-gray-600">Classe / Sede</th>
+                                       <th className="px-4 py-3 font-medium text-gray-600 text-right">Sostituto</th>
                                    </tr>
                                </thead>
                                <tbody className="divide-y divide-gray-100 bg-white">
                                    {getUncoveredSlots().sort((a,b) => a.ora.localeCompare(b.ora)).map(slot => (
-                                       <tr key={slot.id} className="hover:bg-blue-50 transition-colors">
+                                       <tr key={slot.id} className="hover:bg-gray-50">
                                            <td className="px-4 py-3 font-medium text-gray-700">{slot.ora}</td>
-                                           <td className="px-4 py-3 text-red-600 font-bold">{slot.docente}</td>
+                                           <td className="px-4 py-3 font-semibold text-red-600">{slot.docente}</td>
                                            <td className="px-4 py-3">
-                                              <span className="font-bold text-gray-900">{slot.classe}</span>
-                                              <span className="ml-2 text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded font-semibold">{slot.plesso}</span>
+                                              <span className="font-semibold text-gray-800">{slot.classe}</span>
+                                              <span className="ml-2 text-[10px] text-gray-500 uppercase">({slot.plesso})</span>
                                            </td>
                                            <td className="px-4 py-3 text-right">
                                                {userRole.type !== 'GUEST' ? (
-                                                  <button onClick={() => openCandidateSearch(slot)} className="border-2 border-blue-600 text-blue-700 hover:bg-blue-600 hover:text-white text-xs font-bold px-4 py-1.5 rounded transition-all">Cerca Sostituto</button>
+                                                  <button onClick={() => openCandidateSearch(slot)} className="text-[#1bc3c0] border border-[#1bc3c0] hover:bg-[#1bc3c0] hover:text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors">Trova</button>
                                                ) : (
-                                                  <span className="text-[10px] text-gray-400 font-bold uppercase border border-gray-200 px-2 py-1 rounded">Sola Lettura</span>
+                                                  <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-1 rounded">Sola Lettura</span>
                                                )}
                                            </td>
                                        </tr>
@@ -784,65 +868,69 @@ export default function App() {
               </div>
             </div>
             
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 print:shadow-none print:border-none print:p-0 mt-8">
-                <div className="flex justify-between items-center mb-6 print:hidden">
-                    <h2 className="text-xl font-bold text-gray-800">3. Resoconto Ufficiale Sostituzioni</h2>
-                    <button onClick={() => window.print()} className="bg-blue-800 hover:bg-blue-900 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-sm transition-colors">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+            {/* PANNELLO INFERIORE: RESOCONTO SOSTITUZIONI COMPLETATE */}
+            <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 print:shadow-none print:border-none print:p-0">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 print:hidden">
+                    <h2 className="text-lg font-semibold text-gray-800 border-b-2 border-[#1bc3c0] pb-1">3. Resoconto Ufficiale Sostituzioni</h2>
+                    <button onClick={() => window.print()} className="mt-4 sm:mt-0 bg-[#3157a3] hover:bg-[#254280] text-white px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
                         Stampa PDF / Cartaceo
                     </button>
                 </div>
 
-                <div className="hidden print:block mb-6 text-center border-b-2 border-blue-900 pb-4 mt-4">
-                    <h1 className="text-xl font-extrabold uppercase tracking-widest text-blue-900">Resoconto Giornaliero Sostituzioni</h1>
-                    <p className="text-md mt-1 font-bold capitalize text-gray-800">{targetDay}, {getDataFormattata()} — Plesso: {userRole.plesso}</p>
+                <div className="hidden print:block mb-8 text-center border-b border-gray-300 pb-4 mt-4">
+                    <h1 className="text-2xl font-bold uppercase text-gray-900">Resoconto Giornaliero Sostituzioni</h1>
+                    <p className="text-lg mt-1 text-gray-700 capitalize">{targetDay}, {getDataFormattata()} — Plesso: {userRole.plesso}</p>
                 </div>
 
                 {substitutionsLog.length === 0 ? (
-                    <p className="text-gray-500 italic print:hidden text-center py-6 bg-gray-50 rounded-lg">Nessuna sostituzione completata al momento.</p>
+                    <div className="py-8 text-center text-gray-400 print:hidden">
+                        Nessuna sostituzione registrata.
+                    </div>
                 ) : (
-                    <table className="min-w-full divide-y divide-gray-300 border border-gray-300 print:border-2 print:border-black shadow-sm print:shadow-none">
-                        <thead className="bg-gray-100 print:bg-gray-200">
-                            <tr>
-                                <th className="px-4 py-3 text-left font-bold text-red-700 border-r border-gray-300">Docente Assente</th>
-                                <th className="px-4 py-3 text-left font-bold text-gray-800 border-r border-gray-300">Ora</th>
-                                <th className="px-4 py-3 text-left font-bold text-gray-800 border-r border-gray-300">Classe (Sede)</th>
-                                <th className="px-4 py-3 text-left font-bold text-green-700 border-r border-gray-300">Sostituto Assegnato</th>
-                                <th className="px-4 py-3 text-left font-bold text-blue-800 border-r border-gray-300">Modalità</th>
-                                <th className="px-4 py-3 text-center print:hidden">Avvisa Docente (Smart)</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 bg-white">
-                            {substitutionsLog.sort((a,b) => a.docente_assente.localeCompare(b.docente_assente) || a.ora.localeCompare(b.ora)).map(log => (
-                                <tr key={log.id} className="print:break-inside-avoid hover:bg-gray-50">
-                                    <td className="px-4 py-3 border-r border-gray-300 font-bold text-red-600 bg-red-50/50">{log.docente_assente}</td>
-                                    <td className="px-4 py-3 border-r border-gray-300 font-medium">{log.ora}</td>
-                                    <td className="px-4 py-3 border-r border-gray-300">
-                                      <span className="font-bold">{log.classe}</span>
-                                      <span className="ml-1 text-[10px] text-gray-500">({log.plesso})</span>
-                                    </td>
-                                    <td className="px-4 py-3 border-r border-gray-300 font-bold uppercase text-green-700">{log.docente_sostituto}</td>
-                                    <td className="px-4 py-3 border-r border-gray-300 text-xs font-semibold text-gray-700">{log.modalita}</td>
-                                    <td className="px-4 py-2 text-center print:hidden flex flex-wrap justify-center gap-1.5 items-center">
-                                        <button onClick={()=>inviaNotificaVirtual(log, 'wa')} className="bg-green-100 text-green-800 hover:bg-green-200 hover:shadow-sm px-2 py-1 rounded text-xs font-bold transition-all border border-green-200" title="Invia tramite WhatsApp">📱 WA</button>
-                                        <button onClick={()=>inviaNotificaVirtual(log, 'mail')} className="bg-blue-100 text-blue-800 hover:bg-blue-200 hover:shadow-sm px-2 py-1 rounded text-xs font-bold transition-all border border-blue-200" title="Invia Email">✉️ Mail</button>
-                                        <button onClick={()=>inviaNotificaVirtual(log, 'copy')} className="bg-gray-100 text-gray-700 hover:bg-gray-200 hover:shadow-sm px-2 py-1 rounded text-xs font-bold transition-all border border-gray-300" title="Copia Testo per Telegram/Altro">📋 Copia</button>
-                                        <button onClick={() => setSubstitutionsLog(substitutionsLog.filter(l => l.id !== log.id))} className="text-red-400 hover:text-red-700 text-[10px] font-bold underline px-1 ml-2">Annulla</button>
-                                    </td>
+                    <div className="overflow-x-auto border border-gray-200 rounded-md print:border-none print:rounded-none">
+                        <table className="min-w-full text-left text-sm print:text-base">
+                            <thead className="bg-gray-100 text-gray-700 print:bg-white print:border-b-2 print:border-black">
+                                <tr>
+                                    <th className="px-4 py-3 font-medium border-r border-gray-200 print:border-black">Assente</th>
+                                    <th className="px-4 py-3 font-medium border-r border-gray-200 print:border-black">Ora</th>
+                                    <th className="px-4 py-3 font-medium border-r border-gray-200 print:border-black">Classe/Sede</th>
+                                    <th className="px-4 py-3 font-medium text-[#1bc3c0] border-r border-gray-200 print:border-black print:text-black">Sostituto</th>
+                                    <th className="px-4 py-3 font-medium border-r border-gray-200 print:border-black">Modalità</th>
+                                    <th className="px-4 py-3 text-center print:hidden">Avvisa Docente</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 bg-white print:divide-black">
+                                {substitutionsLog.sort((a,b) => a.docente_assente.localeCompare(b.docente_assente) || a.ora.localeCompare(b.ora)).map(log => (
+                                    <tr key={log.id} className="print:break-inside-avoid hover:bg-gray-50">
+                                        <td className="px-4 py-3 border-r border-gray-200 font-semibold text-red-600 print:border-black print:text-black">{log.docente_assente}</td>
+                                        <td className="px-4 py-3 border-r border-gray-200 text-gray-800 print:border-black">{log.ora}</td>
+                                        <td className="px-4 py-3 border-r border-gray-200 print:border-black">
+                                          <span className="font-semibold text-gray-900">{log.classe}</span>
+                                          <span className="ml-1 text-[10px] text-gray-500 uppercase">{log.plesso}</span>
+                                        </td>
+                                        <td className="px-4 py-3 border-r border-gray-200 font-bold text-green-700 bg-green-50/50 print:border-black print:bg-white print:text-black">{log.docente_sostituto}</td>
+                                        <td className="px-4 py-3 border-r border-gray-200 text-xs text-gray-600 print:border-black print:text-black">{log.modalita}</td>
+                                        <td className="px-4 py-2 text-center print:hidden flex justify-center gap-2 items-center min-h-[48px]">
+                                            <button onClick={()=>inviaNotificaVirtual(log, 'wa')} className="bg-[#25D366] text-white hover:bg-[#128C7E] px-2 py-1 rounded text-xs font-medium transition-colors">WA</button>
+                                            <button onClick={()=>inviaNotificaVirtual(log, 'copy')} className="bg-gray-200 text-gray-700 hover:bg-gray-300 px-2 py-1 rounded text-xs font-medium transition-colors">Copia</button>
+                                            <button onClick={() => setSubstitutionsLog(substitutionsLog.filter(l => l.id !== log.id))} className="text-gray-400 hover:text-red-500 ml-1" title="Elimina/Annulla"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
                 
-                <div className="hidden print:flex justify-between mt-16 pt-8">
-                    <div className="text-center w-64 border-t-2 border-black pt-2 font-bold">
-                        Il Responsabile di Plesso<br/>
-                        <span className="text-sm font-medium text-gray-600">{userRole.nome}</span>
+                <div className="hidden print:flex justify-between mt-20">
+                    <div className="text-center w-64 border-t border-black pt-2">
+                        <span className="block text-sm font-semibold uppercase">Il Responsabile di Plesso</span>
+                        <span className="text-sm italic text-gray-700 mt-1 block">{userRole.nome}</span>
                     </div>
-                    <div className="text-center w-64 border-t-2 border-black pt-2 font-bold">
-                        La Dirigenza / Vicepresidenza<br/>
-                        <span className="text-sm font-medium text-gray-600">Istituto IPSAT Rocco Chinnici</span>
+                    <div className="text-center w-64 border-t border-black pt-2">
+                        <span className="block text-sm font-semibold uppercase">La Dirigenza</span>
+                        <span className="text-sm italic text-gray-700 mt-1 block">Istituto IPSAT Rocco Chinnici</span>
                     </div>
                 </div>
             </div>
@@ -850,18 +938,19 @@ export default function App() {
           </div>
         )}
 
+        {/* TAB ARCHIVIO STORICO */}
         {activeTab === 'STORICO' && (
-          <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6 md:p-8 space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-gray-200 pb-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 min-h-[50vh]">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-gray-100 pb-4">
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">Archivio Storico Sostituzioni</h2>
-                <p className="text-gray-500 text-sm mt-1">Tutte le sostituzioni effettuate rimangono salvate in modo permanente nel Cloud Firebase.</p>
+                <h2 className="text-xl font-semibold text-gray-800">Archivio Sostituzioni</h2>
+                <p className="text-gray-500 text-sm mt-1">Dati salvati in modo permanente su Firebase.</p>
               </div>
-              <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-lg border border-gray-200">
-                <label className="text-sm font-bold text-gray-700">Filtra per Data:</label>
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-gray-600">Filtra per Data:</label>
                 <input 
                   type="date" 
-                  className="p-2 border border-gray-300 rounded-md font-medium focus:border-blue-500 outline-none" 
+                  className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-[#1bc3c0]" 
                   value={selectedHistoryDate} 
                   onChange={(e) => setSelectedHistoryDate(e.target.value)}
                 />
@@ -869,36 +958,33 @@ export default function App() {
             </div>
 
             {historicalLogs.length === 0 ? (
-              <div className="text-center py-16 bg-gray-50 rounded-xl border border-dashed border-gray-300">
-                  <span className="text-4xl block mb-3">🗄️</span>
-                  <p className="text-gray-500 font-medium">Nessun record presente nello storico cloud.</p>
-              </div>
+              <div className="text-center text-gray-400 py-10">Nessun record presente in archivio.</div>
             ) : (
-              <div className="overflow-x-auto border border-gray-200 rounded-lg shadow-sm">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
+              <div className="overflow-x-auto border border-gray-200 rounded-md">
+                <table className="min-w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Data</th>
-                      <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Plesso</th>
-                      <th className="px-4 py-3 text-left font-bold text-red-700 uppercase tracking-wider">Assente</th>
-                      <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Ora / Classe</th>
-                      <th className="px-4 py-3 text-left font-bold text-green-700 uppercase tracking-wider">Sostituto</th>
-                      <th className="px-4 py-3 text-left font-bold text-blue-800 uppercase tracking-wider">Modalità & Firma</th>
+                      <th className="px-4 py-3 font-medium text-gray-600">Data</th>
+                      <th className="px-4 py-3 font-medium text-gray-600">Plesso</th>
+                      <th className="px-4 py-3 font-medium text-gray-600">Assente</th>
+                      <th className="px-4 py-3 font-medium text-gray-600">Ora / Classe</th>
+                      <th className="px-4 py-3 font-medium text-gray-600">Sostituto</th>
+                      <th className="px-4 py-3 font-medium text-gray-600">Firma</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
                     {historicalLogs
                       .filter(log => !selectedHistoryDate || log.dataISO === selectedHistoryDate)
                       .map((log) => (
-                        <tr key={log.id} className="hover:bg-blue-50 transition-colors">
-                          <td className="px-4 py-3 font-mono font-medium text-gray-600 bg-gray-50/50">{log.dataISO}</td>
-                          <td className="px-4 py-3 font-bold text-blue-900">{log.plesso}</td>
-                          <td className="px-4 py-3 font-bold text-red-600">{log.docente_assente}</td>
-                          <td className="px-4 py-3 font-medium">{log.ora} <span className="font-bold">({log.classe})</span></td>
-                          <td className="px-4 py-3 font-bold text-green-700 uppercase">{log.docente_sostituto}</td>
-                          <td className="px-4 py-3 text-xs">
-                            <span className="font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded">{log.modalita}</span>
-                            <div className="text-gray-400 mt-1 italic">Firmato: {log.responsabile_firma}</div>
+                        <tr key={log.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-gray-600">{log.dataISO}</td>
+                          <td className="px-4 py-3 font-semibold text-gray-700">{log.plesso}</td>
+                          <td className="px-4 py-3 font-semibold text-red-600">{log.docente_assente}</td>
+                          <td className="px-4 py-3 text-gray-800">{log.ora} <span className="font-bold ml-1">{log.classe}</span></td>
+                          <td className="px-4 py-3 font-bold text-green-700">{log.docente_sostituto}</td>
+                          <td className="px-4 py-3 text-xs text-gray-500">
+                             <div>Mod: {log.modalita}</div>
+                             <div className="italic mt-0.5">{log.responsabile_firma}</div>
                           </td>
                         </tr>
                     ))}
@@ -909,172 +995,107 @@ export default function App() {
           </div>
         )}
 
+        {/* TAB DATABASE ORARI (SOLO ADMIN) */}
         {activeTab === 'DATABASE' && userRole.type === 'VICEPRESIDENZA' && (
-          <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden print:hidden">
-            <div className="bg-blue-900 p-6 border-b border-gray-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden min-h-[50vh]">
+            <div className="bg-gray-800 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
               <div>
-                 <h2 className="text-xl font-bold text-white">Database Centrale Orari & Rubrica</h2>
-                 <p className="text-blue-200 text-sm mt-1">{dbMessage}</p>
+                 <h2 className="text-xl font-semibold text-white">Database Dati Centrale</h2>
+                 <p className="text-gray-400 text-sm mt-1">{dbMessage || "Gestione orari e anagrafica"}</p>
               </div>
-              <div className="flex gap-2">
-                 <button onClick={() => { if(confirm("⚠️ ATTENZIONE: Sei sicuro di voler SVUOTARE l'intero database e resettare tutto a zero?")) saveDatabaseToCloud([]) }} className="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-bold hover:bg-red-700 shadow-sm transition-colors">Svuota DB</button>
-              </div>
+              <button onClick={() => { if(confirm("ATTENZIONE: Eliminare l'intero database orari?")) svuotaDatabaseAssoluto() }} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm font-medium transition-colors">Svuota DB</button>
             </div>
 
             <div className="p-6">
-                
                 <div className="flex border-b border-gray-200 mb-6 gap-2">
-                    <button 
-                        onClick={() => { setDbRuoloTab('CURRICULARE'); setCurrentPage(1); }}
-                        className={`pb-3 px-6 font-bold text-sm border-b-4 transition-all rounded-t-md ${dbRuoloTab === 'CURRICULARE' ? 'border-blue-800 text-blue-900 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
-                    >
-                        📚 Docenti Curriculari ({scheduleDB.filter(r => r.ruolo === 'CURRICULARE').length})
+                    <button onClick={() => { setDbRuoloTab('CURRICULARE'); setCurrentPage(1); }} className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${dbRuoloTab === 'CURRICULARE' ? 'border-[#1bc3c0] text-[#1bc3c0]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+                        Curriculari <span className="ml-1 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">{scheduleDB.filter(r => r.ruolo === 'CURRICULARE').length}</span>
                     </button>
-                    <button 
-                        onClick={() => { setDbRuoloTab('SOSTEGNO'); setCurrentPage(1); }}
-                        className={`pb-3 px-6 font-bold text-sm border-b-4 transition-all rounded-t-md ${dbRuoloTab === 'SOSTEGNO' ? 'border-green-600 text-green-800 bg-green-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
-                    >
-                        🤝 Docenti Sostegno ({scheduleDB.filter(r => r.ruolo === 'SOSTEGNO').length})
+                    <button onClick={() => { setDbRuoloTab('SOSTEGNO'); setCurrentPage(1); }} className={`px-4 py-2 font-medium text-sm transition-colors border-b-2 ${dbRuoloTab === 'SOSTEGNO' ? 'border-[#8cc63f] text-[#8cc63f]' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+                        Sostegno <span className="ml-1 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">{scheduleDB.filter(r => r.ruolo === 'SOSTEGNO').length}</span>
                     </button>
                 </div>
 
-                <div className="mb-6 flex flex-col md:flex-row gap-4 items-center bg-gray-50 p-4 rounded-xl border border-gray-200">
-                    <div className="w-full md:w-2/3">
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Cerca Docente o Classe</label>
-                        <input type="text" placeholder={`Cerca in ${dbRuoloTab.toLowerCase()} (es. ROSSI o 4A)...`} className="w-full p-3 border border-gray-300 rounded-lg shadow-sm uppercase focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-bold text-blue-900 outline-none transition-all" value={dbSearchTerm} onChange={(e) => { setDbSearchTerm(e.target.value.toUpperCase()); setCurrentPage(1); }} />
-                    </div>
-                    
+                <div className="grid md:grid-cols-2 gap-4 mb-8">
+                    <label className="border border-dashed border-gray-300 rounded-md p-6 bg-gray-50 text-center hover:bg-gray-100 cursor-pointer">
+                        <div className="font-semibold text-gray-700 mb-1">Carica CSV Curriculari</div>
+                        <p className="text-xs text-gray-500">Sovrascrive il DB esistente</p>
+                        <input type="file" accept=".csv" disabled={isSyncing} className="hidden" onChange={(e) => handleFileUpload(e, 'CURRICULARE')} />
+                    </label>
+                    <label className="border border-dashed border-gray-300 rounded-md p-6 bg-gray-50 text-center hover:bg-gray-100 cursor-pointer">
+                        <div className="font-semibold text-gray-700 mb-1">Carica CSV Sostegno</div>
+                        <p className="text-xs text-gray-500">Aggiunge al DB esistente</p>
+                        <input type="file" accept=".csv" disabled={isSyncing} className="hidden" onChange={(e) => handleFileUpload(e, 'SOSTEGNO')} />
+                    </label>
+                </div>
+
+                <div className="flex flex-col md:flex-row gap-4 mb-6">
+                    <input type="text" placeholder={`Cerca in ${dbRuoloTab.toLowerCase()}...`} className="flex-1 px-4 py-2 bg-white border border-gray-300 rounded-md text-sm focus:outline-none focus:border-[#1bc3c0] uppercase" value={dbSearchTerm} onChange={(e) => { setDbSearchTerm(e.target.value.toUpperCase()); setCurrentPage(1); }} />
                     {dbSearchTerm && (
-                        <div className="w-full md:w-1/3 mt-5">
-                            <button onClick={() => {
-                                const existingContact = contactsDB[dbSearchTerm] || { email: '', telefono: '' };
-                                setContactForm(existingContact);
-                                setEditingContact(true);
-                            }} className="w-full py-3 bg-indigo-100 text-indigo-800 font-bold rounded-lg hover:bg-indigo-200 border border-indigo-200 shadow-sm transition-colors">
-                                📞 Gestisci Contatti di {dbSearchTerm}
-                            </button>
-                        </div>
+                        <button onClick={() => {
+                            const existingContact = contactsDB[dbSearchTerm] || { email: '', telefono: '' };
+                            setContactForm(existingContact);
+                            setEditingContact(true);
+                        }} className="px-4 py-2 bg-gray-800 text-white font-medium rounded-md text-sm hover:bg-gray-900">
+                            Rubrica {dbSearchTerm}
+                        </button>
                     )}
                 </div>
 
                 {editingContact && (
-                    <div className="mb-8 p-6 bg-indigo-50 border-2 border-indigo-200 rounded-xl shadow-inner">
-                        <h3 className="font-bold text-indigo-900 mb-4 text-lg flex items-center gap-2">📱 Rubrica: {dbSearchTerm}</h3>
-                        <div className="flex flex-col md:flex-row gap-4 items-end">
-                            <div className="flex-1 w-full">
-                                <label className="text-xs font-bold text-indigo-800 uppercase tracking-wider">Indirizzo Email</label>
-                                <input type="email" className="w-full p-3 border border-indigo-200 rounded-lg shadow-sm outline-none focus:border-indigo-500" value={contactForm.email} onChange={e=>setContactForm({...contactForm, email:e.target.value})} placeholder="es. mario.rossi@scuola.it"/>
-                            </div>
-                            <div className="flex-1 w-full">
-                                <label className="text-xs font-bold text-indigo-800 uppercase tracking-wider">Numero di Telefono (WhatsApp)</label>
-                                <input type="text" className="w-full p-3 border border-indigo-200 rounded-lg shadow-sm outline-none focus:border-indigo-500" value={contactForm.telefono} onChange={e=>setContactForm({...contactForm, telefono:e.target.value})} placeholder="es. 3331234567"/>
-                            </div>
-                            <div className="flex gap-2 w-full md:w-auto mt-4 md:mt-0">
-                                <button onClick={() => saveContactsToCloud({ ...contactsDB, [dbSearchTerm]: contactForm })} className="flex-1 md:flex-none px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-md hover:bg-indigo-700 transition-colors">Salva Dati</button>
-                                <button onClick={() => setEditingContact(false)} className="flex-1 md:flex-none px-4 py-3 bg-white border border-gray-300 text-gray-700 rounded-lg font-bold hover:bg-gray-50 transition-colors">Annulla</button>
-                            </div>
+                    <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-md">
+                        <h3 className="font-semibold text-gray-800 mb-3 text-sm">Contatti: {dbSearchTerm}</h3>
+                        <div className="flex gap-4">
+                            <input type="email" className="flex-1 p-2 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:border-[#1bc3c0]" value={contactForm.email} onChange={e=>setContactForm({...contactForm, email:e.target.value})} placeholder="Email"/>
+                            <input type="text" className="flex-1 p-2 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:border-[#1bc3c0]" value={contactForm.telefono} onChange={e=>setContactForm({...contactForm, telefono:e.target.value})} placeholder="Cellulare"/>
+                            <button onClick={() => saveContactsToCloud({ ...contactsDB, [dbSearchTerm]: contactForm })} className="px-4 py-2 bg-[#8cc63f] text-white rounded text-sm font-medium">Salva</button>
+                            <button onClick={() => setEditingContact(false)} className="px-4 py-2 bg-white border border-gray-300 text-gray-600 rounded text-sm">Annulla</button>
                         </div>
                     </div>
                 )}
 
-                <div className="grid md:grid-cols-2 gap-6 mb-8">
-                    <div className="border-2 border-dashed border-blue-300 rounded-xl p-6 bg-blue-50 flex flex-col items-center justify-center text-center hover:bg-blue-100 transition-colors cursor-pointer relative">
-                        <span className="text-2xl mb-2">📚</span>
-                        <h4 className="font-bold text-blue-900 mb-1">Carica CSV Curriculari</h4>
-                        <p className="text-xs text-blue-700">Sovrascrive i dati esistenti</p>
-                        <input type="file" accept=".csv" disabled={isSyncing} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => handleFileUpload(e, 'CURRICULARE')} />
-                    </div>
-                    <div className="border-2 border-dashed border-green-300 rounded-xl p-6 bg-green-50 flex flex-col items-center justify-center text-center hover:bg-green-100 transition-colors cursor-pointer relative">
-                        <span className="text-2xl mb-2">🤝</span>
-                        <h4 className="font-bold text-green-900 mb-1">Carica CSV Sostegno</h4>
-                        <p className="text-xs text-green-700">Aggiunge al database esistente</p>
-                        <input type="file" accept=".csv" disabled={isSyncing} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => handleFileUpload(e, 'SOSTEGNO')} />
-                    </div>
-                </div>
-
-                <div className="overflow-x-auto border border-gray-200 rounded-lg shadow-sm">
-                    <table className="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead className="bg-gray-100 sticky top-0 shadow-sm">
+                <div className="overflow-x-auto border border-gray-200 rounded-md">
+                    <table className="min-w-full text-left text-sm whitespace-nowrap">
+                        <thead className="bg-gray-50 border-b border-gray-200">
                             <tr>
-                                <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Docente</th>
-                                <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Giorno / Ora</th>
-                                <th className="px-4 py-3 text-left font-bold text-blue-700 uppercase tracking-wider">Classe (Clicca x Modificare)</th>
-                                <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Plesso Assegnato</th>
-                                <th className="px-4 py-3 text-left font-bold text-gray-600 uppercase tracking-wider">Ruolo</th>
-                                <th className="px-4 py-3 text-right">Azione</th>
+                                <th className="px-4 py-2 font-medium text-gray-600">Docente</th>
+                                <th className="px-4 py-2 font-medium text-gray-600">Giorno/Ora</th>
+                                <th className="px-4 py-2 font-medium text-gray-600">Classe</th>
+                                <th className="px-4 py-2 font-medium text-gray-600">Plesso Calcolato</th>
+                                <th className="px-4 py-2 text-right"></th>
                             </tr>
                         </thead>
-                        <tbody className="bg-white divide-y divide-gray-100">
-                            {paginatedDbRows.length === 0 ? (
-                                <tr>
-                                    <td colSpan="6" className="text-center py-12 text-gray-400 font-medium">Nessun record trovato. Carica un CSV o cambia termine di ricerca.</td>
+                        <tbody className="divide-y divide-gray-100 bg-white">
+                            {paginatedDbRows.map((row) => (
+                                <tr key={row.id} className="hover:bg-gray-50">
+                                    <td className="px-4 py-2 font-semibold text-gray-800">
+                                        {row.docente} {contactsDB[row.docente] && <span className="text-[10px] text-green-600 ml-1">📱</span>}
+                                    </td>
+                                    <td className="px-4 py-2 text-gray-600">{row.giorno} ({row.ora})</td>
+                                    <td className="px-4 py-2 font-bold cursor-pointer" onClick={() => startEditingClass(row)}>
+                                        {editingRow === row.id ? (
+                                            <input type="text" className="border border-[#1bc3c0] rounded px-2 py-1 w-24 text-sm uppercase" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => saveEditedClass(row.id)} onKeyDown={(e) => e.key === 'Enter' && saveEditedClass(row.id)} autoFocus />
+                                        ) : (
+                                            <span className="text-[#1bc3c0]">{row.classe}</span>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-2 text-xs font-semibold text-gray-500">{row.plesso}</td>
+                                    <td className="px-4 py-2 text-right">
+                                        <button onClick={() => { if(confirm("Eliminare?")) saveDatabaseToCloud(scheduleDB.filter(item => item.id !== row.id)) }} className="text-red-500 hover:underline text-xs">Elimina</button>
+                                    </td>
                                 </tr>
-                            ) : (
-                                paginatedDbRows.map((row) => (
-                                    <tr key={row.id} className="hover:bg-blue-50/50 transition-colors">
-                                        <td className="px-4 py-2 font-bold text-gray-800 flex items-center gap-2">
-                                            {row.docente}
-                                            {contactsDB[row.docente] && (contactsDB[row.docente].email || contactsDB[row.docente].telefono) && <span title="Contatti Salvati" className="text-[10px] bg-indigo-100 text-indigo-700 rounded px-1.5 py-0.5 border border-indigo-200">📞 INFO</span>}
-                                        </td>
-                                        <td className="px-4 py-2 font-medium text-gray-600">{row.giorno} ({row.ora})</td>
-                                        
-                                        <td className="px-4 py-2 font-extrabold cursor-pointer hover:bg-blue-100 transition-colors text-blue-900" onClick={() => startEditingClass(row)} title="Clicca per modificare la classe.">
-                                            {editingRow === row.id ? (
-                                                <input
-                                                    type="text"
-                                                    className="border-2 border-blue-500 rounded px-2 py-1 w-24 text-sm uppercase shadow-sm bg-white outline-none"
-                                                    value={editValue}
-                                                    onChange={(e) => setEditValue(e.target.value)}
-                                                    onBlur={() => saveEditedClass(row.id)}
-                                                    onKeyDown={(e) => e.key === 'Enter' && saveEditedClass(row.id)}
-                                                    autoFocus
-                                                />
-                                            ) : (
-                                                row.classe
-                                            )}
-                                        </td>
-                                        
-                                        <td className="px-4 py-2">
-                                            <span className={`text-[10px] px-2 py-1 rounded font-bold border ${row.plesso === 'NICOLOSI' ? 'bg-gray-100 border-gray-200 text-gray-700' : 'bg-purple-100 border-purple-200 text-purple-800'}`}>
-                                                {row.plesso}
-                                            </span>
-                                        </td>
-                                        
-                                        <td className="px-4 py-2">
-                                            <span className={`text-[10px] font-bold px-2 py-1 rounded border ${row.ruolo === 'SOSTEGNO' ? 'bg-green-100 border-green-200 text-green-800' : 'bg-gray-100 border-gray-200 text-gray-700'}`}>{row.ruolo}</span>
-                                        </td>
-                                        <td className="px-4 py-2 text-right">
-                                            <button onClick={() => { if(confirm("Eliminare questa singola ora?")) saveDatabaseToCloud(scheduleDB.filter(item => item.id !== row.id)) }} className="text-red-400 hover:text-red-700 hover:bg-red-50 font-bold px-3 py-1 rounded transition-colors text-xs">Elimina</button>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
+                            ))}
                         </tbody>
                     </table>
                 </div>
 
                 {totalPages > 1 && (
-                    <div className="flex justify-between items-center mt-6 px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg shadow-sm">
-                        <button 
-                            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                            disabled={currentPage === 1}
-                            className={`px-4 py-2 rounded font-bold text-sm transition-colors ${currentPage === 1 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-800 text-white hover:bg-blue-900 shadow-sm'}`}
-                        >
-                            ← Indietro
-                        </button>
-                        <span className="text-sm font-semibold text-gray-700">
-                            Pagina <span className="text-blue-700 font-bold">{currentPage}</span> di {totalPages} (Totale record: {filteredDbRows.length})
-                        </span>
-                        <button 
-                            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                            disabled={currentPage === totalPages}
-                            className={`px-4 py-2 rounded font-bold text-sm transition-colors ${currentPage === totalPages ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-800 text-white hover:bg-blue-900 shadow-sm'}`}
-                        >
-                            Avanti →
-                        </button>
+                    <div className="flex justify-between items-center mt-4">
+                        <button onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className="px-3 py-1 bg-gray-100 rounded text-sm disabled:opacity-50">Indietro</button>
+                        <span className="text-sm text-gray-600">Pagina {currentPage} di {totalPages}</span>
+                        <button onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} disabled={currentPage === totalPages} className="px-3 py-1 bg-gray-100 rounded text-sm disabled:opacity-50">Avanti</button>
                     </div>
                 )}
-
             </div>
           </div>
         )}
