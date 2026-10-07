@@ -40,6 +40,7 @@ const MAPPA_CLASSI_PLESSI = {
   "PATERNO'": ["1I", "1B S", "2I", "2L", "3F CUC", "4F CUC", "5F CUC", "3D SALA", "4D SALA", "5D SALA"] 
 };
 
+
 // ============================================================================
 // 🔐 ACCOUNT ISTITUZIONALI RESPONSABILI (Firebase Auth)
 // ============================================================================
