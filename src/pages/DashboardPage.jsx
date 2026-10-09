@@ -184,16 +184,40 @@ export default function DashboardPage({ user, userRole }) {
     } catch (error) {}
   };
 
-  // === LOGICA ASSENZE E SOSTITUZIONI ===
-  const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
+  // === FILTRI DI PLESSO PER LA VISUALIZZAZIONE ===
   
   const getFilteredScheduleDB = () => {
-    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') {
-        return scheduleDB;
-    }
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return scheduleDB;
     return scheduleDB.filter(s => s.plesso === userRole?.plesso);
   };
 
+  const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
+  
+  // Mostra solo le assenze dei docenti che lavorano nel plesso dell'utente
+  const filteredActiveAbsences = activeAbsences.filter(t => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    return scheduleDB.some(s => s.giorno === targetDay && s.docente === t.nome && s.plesso === userRole?.plesso);
+  });
+
+  // Filtra il Resoconto Sostituzioni per mostrare solo quelle del proprio plesso
+  const filteredSubstitutionsLog = substitutionsLog.filter(log => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    return log.plesso === userRole?.plesso;
+  });
+
+  // Filtra lo Storico per mostrare solo quello del proprio plesso
+  const filteredHistoricalLogs = historicalLogs.filter(log => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    return log.plesso === userRole?.plesso;
+  });
+
+  // Filtra la lista Aderenti Assemblea per il proprio plesso
+  const filteredAssemblyTeachers = (assembliesDB.find(a => a.dataISO === assemblyDateStr)?.docenti || []).filter(t => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    return scheduleDB.some(s => s.giorno === assemblyDay && s.docente === t && s.plesso === userRole?.plesso);
+  });
+
+  // === LOGICA ASSENZE E SOSTITUZIONI ===
   const togglePartialHour = (orarioStr) => {
     setSelectedPartialHours(prev => prev.includes(orarioStr) ? prev.filter(h => h !== orarioStr) : [...prev, orarioStr]);
   };
@@ -226,7 +250,6 @@ export default function DashboardPage({ user, userRole }) {
 
   const openCandidateSearch = (slot) => {
       setActiveSlotSearch(slot);
-
       const activeDb = getFilteredScheduleDB();
       const orariDelGiorno = activeDb.filter(s => s.giorno === targetDay);
       let orariDiQuestaOra = slot.ora === 'Tutto il giorno' ? orariDelGiorno : orariDelGiorno.filter(s => s.ora === slot.ora);
@@ -241,7 +264,6 @@ export default function DashboardPage({ user, userRole }) {
 
       orariDiQuestaOra.forEach(slotCorrente => {
           if(docentiGiaAssegnatiOggi.includes(slotCorrente.docente)) return;
-
           const isAssenteInQuestaOra = activeAbsences.some(at => {
               if (!slotCorrente.docente.includes(at.nome)) return false;
               if (at.tipo === 'INTERA') return true;
@@ -249,7 +271,6 @@ export default function DashboardPage({ user, userRole }) {
           });
           if (isAssenteInQuestaOra) return;
 
-          // BLOCCO PLESSO: Verifica che il candidato si trovi nello stesso plesso dell'assente
           const isStessoPlesso = slotCorrente.plesso === slot.plesso;
 
           if (classiCorrispondono(slotCorrente.classe, slot.classe)) {
@@ -261,7 +282,6 @@ export default function DashboardPage({ user, userRole }) {
                   score: 100
               });
           }
-          // Per Potenziamento/Disposizione, accettiamo SOLO docenti fisicamente nello stesso plesso
           else if (isStessoPlesso && (slotCorrente.tipologia === 'A DISPOSIZIONE' || slotCorrente.tipologia === 'POTENZIAMENTO')) {
               potentialSubstitutes.push({
                   id_cand: `${slotCorrente.docente}-DISP`,
@@ -273,7 +293,6 @@ export default function DashboardPage({ user, userRole }) {
           }
       });
 
-      // Ricerca docenti Liberi (Buco orario)
       const tuttiDocentiOggi = new Set(orariDelGiorno.map(s => s.docente));
       tuttiDocentiOggi.forEach(doc => {
           if (!docentiImpegnati.has(doc)) {
@@ -285,8 +304,6 @@ export default function DashboardPage({ user, userRole }) {
 
               if (!isAssenteInQuestaOra) {
                   const slotDelDocenteOggi = orariDelGiorno.filter(s => s.docente === doc);
-                  
-                  // BLOCCO PLESSO: Il docente "libero" deve avere almeno un'altra ora in quel plesso oggi
                   const lavoraNelloStessoPlesso = slotDelDocenteOggi.some(s => s.plesso === slot.plesso);
 
                   if (lavoraNelloStessoPlesso) {
@@ -346,10 +363,18 @@ export default function DashboardPage({ user, userRole }) {
       setActiveSlotSearch(null);
   };
 
-  const pendingDrafts = substitutionsLog.some(log => log.isDraft && log.dataISO === targetDateStr);
+  const pendingDrafts = filteredSubstitutionsLog.some(log => log.isDraft && log.dataISO === targetDateStr);
   
   const confermaSostituzioni = async () => {
-    const confirmedLogs = substitutionsLog.map(l => l.dataISO === targetDateStr ? { ...l, isDraft: false } : l);
+    const confirmedLogs = substitutionsLog.map(l => {
+      if (l.dataISO === targetDateStr && l.isDraft) {
+        // Conferma solo le bozze del plesso del responsabile (o tutte se è la Vicepresidenza)
+        if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || l.plesso === userRole?.plesso) {
+            return { ...l, isDraft: false };
+        }
+      }
+      return l;
+    });
     setSubstitutionsLog(confirmedLogs); setHistoricalLogs(confirmedLogs);
     await saveHistoricalLogsToCloud(confirmedLogs);
     alert("✅ Sostituzioni confermate e salvate in archivio!");
@@ -383,10 +408,10 @@ export default function DashboardPage({ user, userRole }) {
     }
   };
 
-  // === LOGICA ASSEMBLEE CON CALCOLO ORE E AGGREGAZIONE RIPRISTINATA ===
+  // === LOGICA ASSEMBLEE CON CALCOLO ORE E AGGREGAZIONE ===
   const currentAssembly = assembliesDB.find(a => a.dataISO === assemblyDateStr) || { ore: [], docenti: [] };
   const assemblyHours = currentAssembly.ore;
-  const assemblyTeachersList = currentAssembly.docenti;
+  const assemblyTeachersList = currentAssembly.docenti; // Manteniamo la lista globale intatta
 
   const updateAssembly = (dataISO, ore, docenti) => {
     const otherAssemblies = assembliesDB.filter(a => a.dataISO !== dataISO);
@@ -409,21 +434,18 @@ export default function DashboardPage({ user, userRole }) {
   const getAssemblyImpact = () => {
     const todaySlots = getFilteredScheduleDB().filter(s => s.giorno === assemblyDay);
 
-    // 1. Estrai gli slot dei docenti aderenti
     const affectedSlots = todaySlots.filter(s =>
         assemblyTeachersList.some(t => s.docente.includes(t)) &&
         assemblyHours.includes(s.ora) &&
         s.tipologia !== 'A DISPOSIZIONE' && s.tipologia !== 'POTENZIAMENTO'
     );
 
-    // Funzione interna per estrarre la radice della classe e accomunare Sostegno e Curriculare
     const estraiAnima = (testo) => {
         let pulito = testo.toUpperCase().replace(/[\s\.\-_]/g, '').replace(/SOSTEGNO|SOST/g, '');
         let match = pulito.match(/^(\d+[A-Z]+)/);
         return match ? match[1] : pulito;
     };
 
-    // 2. Trova i co-docenti per ogni slot usando il VERO algoritmo originale
     const slotsConStato = affectedSlots.map(slot => {
         const coTeachers = todaySlots.filter(s =>
             classiCorrispondono(s.classe, slot.classe) &&
@@ -432,49 +454,30 @@ export default function DashboardPage({ user, userRole }) {
             !assemblyTeachersList.some(t => s.docente.includes(t))
         );
 
-        return {
-            ...slot,
-            haCopertura: coTeachers.length > 0,
-            coTeachersNomi: coTeachers.map(c => c.docente).join(', ')
-        };
+        return { ...slot, haCopertura: coTeachers.length > 0, coTeachersNomi: coTeachers.map(c => c.docente).join(', ') };
     });
 
-    // 3. Raggruppamento per classe base per determinare l'ora esatta in circolare
     const gruppiClasse = {};
     slotsConStato.forEach(slot => {
         const classeBase = estraiAnima(slot.classe);
-
         if (!gruppiClasse[classeBase]) {
-            gruppiClasse[classeBase] = {
-                classeOriginale: slot.classe,
-                plesso: slot.plesso,
-                docentiAderenti: new Set(),
-                oreCoinvolte: new Set(),
-                oreScoperte: new Set(),
-                coperture: {}
-            };
+            gruppiClasse[classeBase] = { classeOriginale: slot.classe, plesso: slot.plesso, docentiAderenti: new Set(), oreCoinvolte: new Set(), oreScoperte: new Set(), coperture: {} };
         }
-        
         gruppiClasse[classeBase].docentiAderenti.add(slot.docente);
         gruppiClasse[classeBase].oreCoinvolte.add(slot.ora);
         
         if (slot.haCopertura) {
-            if (!gruppiClasse[classeBase].coperture[slot.ora]) {
-               gruppiClasse[classeBase].coperture[slot.ora] = [];
-            }
+            if (!gruppiClasse[classeBase].coperture[slot.ora]) gruppiClasse[classeBase].coperture[slot.ora] = [];
             gruppiClasse[classeBase].coperture[slot.ora].push(slot.coTeachersNomi);
         } else {
             gruppiClasse[classeBase].oreScoperte.add(slot.ora);
         }
     });
 
-    // 4. Generazione del report finale e calcolo dell'ora
     const reportFinale = [];
     Object.values(gruppiClasse).forEach(gruppo => {
         const oreScoperteArray = Array.from(gruppo.oreScoperte).sort();
-        
-        let status = '';
-        let note = '';
+        let status = ''; let note = '';
 
         if (oreScoperteArray.length === 0) {
             status = 'REGOLARE';
@@ -486,25 +489,14 @@ export default function DashboardPage({ user, userRole }) {
 
             if (firstHourStr.startsWith('08:00') || firstHourStr.startsWith('08:50')) {
                 const endTime = lastHourStr.split('-')[1];
-                status = 'INGRESSO POSTICIPATO';
-                note = `Ingresso posticipato alle ore ${endTime} (Avviso Famiglie)`;
+                status = 'INGRESSO POSTICIPATO'; note = `Ingresso posticipato alle ore ${endTime} (Avviso Famiglie)`;
             } else {
                 const startTime = firstHourStr.split('-')[0];
-                status = 'USCITA ANTICIPATA';
-                note = `Uscita anticipata alle ore ${startTime} (Avviso Famiglie)`;
+                status = 'USCITA ANTICIPATA'; note = `Uscita anticipata alle ore ${startTime} (Avviso Famiglie)`;
             }
         }
-
-        reportFinale.push({
-            classe: gruppo.classeOriginale,
-            plesso: gruppo.plesso,
-            ora: Array.from(gruppo.oreCoinvolte).sort().join(', '),
-            docente: Array.from(gruppo.docentiAderenti).join(', '),
-            status,
-            note
-        });
+        reportFinale.push({ classe: gruppo.classeOriginale, plesso: gruppo.plesso, ora: Array.from(gruppo.oreCoinvolte).sort().join(', '), docente: Array.from(gruppo.docentiAderenti).join(', '), status, note });
     });
-
     return reportFinale.sort((a,b) => a.classe.localeCompare(b.classe));
   };
 
@@ -764,7 +756,7 @@ export default function DashboardPage({ user, userRole }) {
                      )}
                  </div>
 
-                 {activeAbsences.map(t => (
+                 {filteredActiveAbsences.map(t => (
                     <div key={t.id} className="flex justify-between items-center bg-white border-l-4 border-red-500 shadow-sm p-2 mb-2 rounded-r">
                        <div>
                           <span className="font-bold text-sm block text-gray-800">{t.nome}</span>
@@ -883,7 +875,7 @@ export default function DashboardPage({ user, userRole }) {
                     <p className="text-sm mt-1 text-gray-700 capitalize">Del {formatDataEstesa(targetDateStr)}</p>
                  </div>
 
-                 {substitutionsLog.filter(l => l.dataISO === targetDateStr).length === 0 ? (
+                 {filteredSubstitutionsLog.filter(l => l.dataISO === targetDateStr).length === 0 ? (
                     <div className="py-8 text-center text-gray-400 bg-gray-50 border border-dashed border-gray-200 text-sm font-semibold print:hidden">
                        Nessuna sostituzione registrata in questa data.
                     </div>
@@ -900,7 +892,7 @@ export default function DashboardPage({ user, userRole }) {
                           </tr>
                        </thead>
                        <tbody className="divide-y divide-gray-200 print:divide-black">
-                          {substitutionsLog.filter(l => l.dataISO === targetDateStr).sort((a,b) => a.docente_assente.localeCompare(b.docente_assente) || a.ora.localeCompare(b.ora)).map(log => (
+                          {filteredSubstitutionsLog.filter(l => l.dataISO === targetDateStr).sort((a,b) => a.docente_assente.localeCompare(b.docente_assente) || a.ora.localeCompare(b.ora)).map(log => (
                              <tr key={log.id} className="hover:bg-gray-50 print:break-inside-avoid">
                                 <td className="p-2 border-r text-red-500 font-bold print:text-black">{log.docente_assente}</td>
                                 <td className="p-2 border-r font-semibold">{log.ora}</td>
@@ -960,9 +952,9 @@ export default function DashboardPage({ user, userRole }) {
                  </div>
 
                  <div className="flex flex-wrap gap-2">
-                    {assemblyTeachersList.map(t => (
+                    {filteredAssemblyTeachers.map(t => (
                        <span key={t} className="bg-white border border-gray-200 shadow-sm px-2 py-1.5 text-xs font-bold rounded flex items-center gap-2">
-                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyHours, assemblyTeachersList.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
+                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyHours, assembliesDB.find(a => a.dataISO === assemblyDateStr).docenti.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
                        </span>
                     ))}
                  </div>
@@ -1043,7 +1035,7 @@ export default function DashboardPage({ user, userRole }) {
                        <tr><th className="p-3 font-bold text-gray-600 uppercase text-xs">Data</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Plesso</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Assente</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Ora / Classe</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Sostituto</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Firma / Mod.</th></tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                       {historicalLogs.filter(log => !selectedHistoryDate || log.dataISO === selectedHistoryDate).map((log) => (
+                       {filteredHistoricalLogs.filter(log => !selectedHistoryDate || log.dataISO === selectedHistoryDate).map((log) => (
                           <tr key={log.id} className="hover:bg-gray-50">
                              <td className="p-3 font-semibold text-gray-600">{formatDataEstesa(log.dataISO)}</td>
                              <td className="p-3 font-bold text-xs">{log.plesso}</td>
