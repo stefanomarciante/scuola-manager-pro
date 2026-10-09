@@ -200,15 +200,18 @@ export default function DashboardPage({ user, userRole }) {
   });
 
   // Filtra il Resoconto Sostituzioni per mostrare solo quelle del proprio plesso
+  // Filtra il Resoconto Sostituzioni
   const filteredSubstitutionsLog = substitutionsLog.filter(log => {
     if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
-    return log.plesso === userRole?.plesso;
+    const docenteAppartiene = scheduleDB.some(s => s.docente === log.docente_assente && s.plesso === userRole?.plesso);
+    return log.plesso === userRole?.plesso && docenteAppartiene;
   });
 
-  // Filtra lo Storico per mostrare solo quello del proprio plesso
+  // Filtra lo Storico per mostrare solo quello del proprio plesso e dei propri docenti
   const filteredHistoricalLogs = historicalLogs.filter(log => {
     if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
-    return log.plesso === userRole?.plesso;
+    const docenteAppartiene = scheduleDB.some(s => s.docente === log.docente_assente && s.plesso === userRole?.plesso);
+    return log.plesso === userRole?.plesso && docenteAppartiene;
   });
 
   // Filtra la lista Aderenti Assemblea per il proprio plesso
@@ -225,6 +228,16 @@ export default function DashboardPage({ user, userRole }) {
   const addAbsentTeacher = () => {
     if(!absentInput) return;
     const cleanName = cleanStr(absentInput);
+    
+    // VERIFICA APPARTENENZA AL PLESSO
+    if (userRole?.type !== 'VICEPRESIDENZA' && userRole?.plesso !== 'TUTTI' && userRole?.type !== 'GUEST') {
+        const appartiene = scheduleDB.some(s => s.docente === cleanName && s.plesso === userRole?.plesso);
+        if (!appartiene) {
+            alert(`Operazione negata. Il docente ${cleanName} non ha ore nel plesso di ${userRole?.plesso}.`);
+            return;
+        }
+    }
+
     if(absenceMode === 'PARZIALE' && selectedPartialHours.length === 0) return alert("Seleziona almeno un'ora.");
     
     const existingIndex = absentTeachers.findIndex(t => t.nome === cleanName && t.dataISO === targetDateStr);
@@ -426,6 +439,16 @@ export default function DashboardPage({ user, userRole }) {
   const addAssemblyTeacher = () => {
     if(!assemblyTeacherInput) return;
     const cleanName = cleanStr(assemblyTeacherInput);
+    
+    // VERIFICA APPARTENENZA AL PLESSO
+    if (userRole?.type !== 'VICEPRESIDENZA' && userRole?.plesso !== 'TUTTI' && userRole?.type !== 'GUEST') {
+        const appartiene = scheduleDB.some(s => s.docente === cleanName && s.plesso === userRole?.plesso);
+        if (!appartiene) {
+            alert(`Operazione negata. Il docente ${cleanName} non ha ore nel plesso di ${userRole?.plesso}.`);
+            return;
+        }
+    }
+
     const newDocenti = assemblyTeachersList.includes(cleanName) ? assemblyTeachersList : [...assemblyTeachersList, cleanName];
     updateAssembly(assemblyDateStr, assemblyHours, newDocenti);
     setAssemblyTeacherInput('');
@@ -658,7 +681,9 @@ export default function DashboardPage({ user, userRole }) {
             if (oreStessoGiorno.length > 0) {
                 slot.plesso = oreStessoGiorno[0].plesso;
             } else {
-                slot.plesso = "NICOLOSI";
+                // Se non ha ore nello stesso giorno, cerca in tutta la settimana
+                const oreQualsiasiGiorno = flatList.filter(s => s.docente === slot.docente && s.plesso !== null);
+                slot.plesso = oreQualsiasiGiorno.length > 0 ? oreQualsiasiGiorno[0].plesso : "NICOLOSI";
             }
         }
     });
