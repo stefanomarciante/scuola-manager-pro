@@ -15,6 +15,8 @@ const FASCIE_ORARIE_STANDARD = [
   { label: '7ª', orario: '13:30-14:20' }
 ];
 
+const DEFAULT_BUDGET = 30;
+
 export default function DashboardPage({ user, userRole }) {
   const [activeTab, setActiveTab] = useState('DASHBOARD');
   const [scheduleDB, setScheduleDB] = useState([]);
@@ -30,6 +32,16 @@ export default function DashboardPage({ user, userRole }) {
   const [substitutionsLog, setSubstitutionsLog] = useState([]);
   const [activeSlotSearch, setActiveSlotSearch] = useState(null);
   const [candidates, setCandidates] = useState([]);
+  const [incastri, setIncastri] = useState([]);
+
+  // === STATI BUDGET ===
+  const [budgetConfig, setBudgetConfig] = useState({});
+  const [editingBudgetPlesso, setEditingBudgetPlesso] = useState(null);
+  const [budgetInputValue, setBudgetInputValue] = useState('');
+
+  // === STATI ASSEGNAZIONE MANUALE ===
+  const [manualSubInput, setManualSubInput] = useState('');
+  const [manualSubMode, setManualSubMode] = useState('Cambio Turno');
 
   // === STATI ASSEMBLEE ===
   const [assembliesDB, setAssembliesDB] = useState([]);
@@ -54,10 +66,19 @@ export default function DashboardPage({ user, userRole }) {
   // === FUNZIONI DI SUPPORTO ===
   const determinaPlessoDaClasse = (classeStr) => {
     if (!classeStr) return null;
-    const classeClean = classeStr.toUpperCase().replace(/\s+/g, '');
+    const classeClean = classeStr.toUpperCase().replace(/\s+/g, ' '); 
+    const classeNoSpace = classeStr.toUpperCase().replace(/\s+/g, '');
+
+    if (classeClean.includes('POT') || classeClean.includes('DISP')) {
+        const plessiDisponibili = ["NICOLOSI", "PEDARA", "TRECASTAGNI", "SANTA MARIA DI LICODIA", "PATERNO'"];
+        for (const plesso of plessiDisponibili) {
+            if (classeClean.includes(plesso)) return plesso; 
+        }
+    }
+
     for (const [plesso, classiArray] of Object.entries(MAPPA_CLASSI_PLESSI)) {
       for (const sigla of classiArray) {
-        if (classeClean.includes(sigla.toUpperCase().replace(/\s+/g, ''))) return plesso;
+        if (classeNoSpace.includes(sigla.toUpperCase().replace(/\s+/g, ''))) return plesso;
       }
     }
     return null; 
@@ -154,6 +175,11 @@ export default function DashboardPage({ user, userRole }) {
           setHistoricalLogs(logs);
           setSubstitutionsLog(logs);
         }
+
+        const budRef = doc(db, 'artifacts', appId, 'public', 'data', 'orari', 'budget_config');
+        const budSnap = await getDoc(budRef);
+        if(budSnap.exists()) setBudgetConfig(budSnap.data().config || {});
+
       } catch (error) { console.error("Errore Firebase:", error); } 
       finally { setIsSyncing(false); }
     };
@@ -184,16 +210,77 @@ export default function DashboardPage({ user, userRole }) {
     } catch (error) {}
   };
 
-  // === LOGICA ASSENZE E SOSTITUZIONI ===
-  const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
+  const saveBudgetConfigToCloud = async (newConfigObj) => {
+    try {
+        const budRef = doc(db, 'artifacts', appId, 'public', 'data', 'orari', 'budget_config');
+        await setDoc(budRef, { config: newConfigObj, updatedAt: new Date().toISOString() });
+        setBudgetConfig(newConfigObj);
+        setEditingBudgetPlesso(null);
+    } catch (error) {}
+  };
+
+  // === FILTRI DI PLESSO PER LA VISUALIZZAZIONE ===
   
   const getFilteredScheduleDB = () => {
-    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') {
-        return scheduleDB;
-    }
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return scheduleDB;
     return scheduleDB.filter(s => s.plesso === userRole?.plesso);
   };
 
+  const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
+  
+  const filteredActiveAbsences = activeAbsences.filter(t => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    return scheduleDB.some(s => s.giorno === targetDay && s.docente === t.nome && s.plesso === userRole?.plesso);
+  });
+
+  const filteredSubstitutionsLog = substitutionsLog.filter(log => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    const docenteAppartiene = scheduleDB.some(s => s.docente === log.docente_assente && s.plesso === userRole?.plesso);
+    return log.plesso === userRole?.plesso && docenteAppartiene;
+  });
+
+  const filteredHistoricalLogs = historicalLogs.filter(log => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    const docenteAppartiene = scheduleDB.some(s => s.docente === log.docente_assente && s.plesso === userRole?.plesso);
+    return log.plesso === userRole?.plesso && docenteAppartiene;
+  });
+
+  const filteredAssemblyTeachers = (assembliesDB.find(a => a.dataISO === assemblyDateStr)?.docenti || []).filter(t => {
+    if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return true;
+    return scheduleDB.some(s => s.giorno === assemblyDay && s.docente === t && s.plesso === userRole?.plesso);
+  });
+
+  // === CALCOLO BUDGET RENDICONTAZIONE ===
+  const getPlessoBudgetMax = (plessoName) => {
+      return budgetConfig[plessoName] !== undefined ? budgetConfig[plessoName] : DEFAULT_BUDGET;
+  };
+
+  const getBudgetStats = () => {
+      const stats = {};
+      
+      const plessiBase = ["NICOLOSI", "PEDARA", "TRECASTAGNI", "SANTA MARIA DI LICODIA", "PATERNO'"];
+      plessiBase.forEach(p => {
+          stats[p] = { usate: 0, logs: [], max: getPlessoBudgetMax(p) };
+      });
+
+      historicalLogs.filter(log => !log.isDraft && log.modalita.includes('Pagamento')).forEach(log => {
+          if(!stats[log.plesso]) stats[log.plesso] = { usate: 0, logs: [], max: getPlessoBudgetMax(log.plesso) };
+          stats[log.plesso].usate += 1;
+          stats[log.plesso].logs.push(log);
+      });
+
+      // Filtro per ruolo: mostra tutti alla VP, mostra solo il proprio plesso ai responsabili
+      if (userRole?.type !== 'VICEPRESIDENZA' && userRole?.plesso !== 'TUTTI' && userRole?.plesso !== 'NESSUNO') {
+          const filteredStats = {};
+          if (stats[userRole.plesso]) filteredStats[userRole.plesso] = stats[userRole.plesso];
+          return filteredStats;
+      }
+      
+      return stats;
+  };
+  const budgetStats = getBudgetStats();
+
+  // === LOGICA ASSENZE E SOSTITUZIONI ===
   const togglePartialHour = (orarioStr) => {
     setSelectedPartialHours(prev => prev.includes(orarioStr) ? prev.filter(h => h !== orarioStr) : [...prev, orarioStr]);
   };
@@ -201,6 +288,15 @@ export default function DashboardPage({ user, userRole }) {
   const addAbsentTeacher = () => {
     if(!absentInput) return;
     const cleanName = cleanStr(absentInput);
+    
+    if (userRole?.type !== 'VICEPRESIDENZA' && userRole?.plesso !== 'TUTTI' && userRole?.type !== 'GUEST') {
+        const appartiene = scheduleDB.some(s => s.docente === cleanName && s.plesso === userRole?.plesso);
+        if (!appartiene) {
+            alert(`Operazione negata. Il docente ${cleanName} non ha ore nel plesso di ${userRole?.plesso}.`);
+            return;
+        }
+    }
+
     if(absenceMode === 'PARZIALE' && selectedPartialHours.length === 0) return alert("Seleziona almeno un'ora.");
     
     const existingIndex = absentTeachers.findIndex(t => t.nome === cleanName && t.dataISO === targetDateStr);
@@ -226,7 +322,8 @@ export default function DashboardPage({ user, userRole }) {
 
   const openCandidateSearch = (slot) => {
       setActiveSlotSearch(slot);
-
+      setManualSubInput('');
+      setManualSubMode('Cambio Turno');
       const activeDb = getFilteredScheduleDB();
       const orariDelGiorno = activeDb.filter(s => s.giorno === targetDay);
       let orariDiQuestaOra = slot.ora === 'Tutto il giorno' ? orariDelGiorno : orariDelGiorno.filter(s => s.ora === slot.ora);
@@ -239,9 +336,9 @@ export default function DashboardPage({ user, userRole }) {
 
       let potentialSubstitutes = [];
 
+      // 1. COMPRESENZE, DISPOSIZIONI E POTENZIAMENTI
       orariDiQuestaOra.forEach(slotCorrente => {
           if(docentiGiaAssegnatiOggi.includes(slotCorrente.docente)) return;
-
           const isAssenteInQuestaOra = activeAbsences.some(at => {
               if (!slotCorrente.docente.includes(at.nome)) return false;
               if (at.tipo === 'INTERA') return true;
@@ -249,10 +346,13 @@ export default function DashboardPage({ user, userRole }) {
           });
           if (isAssenteInQuestaOra) return;
 
-          // BLOCCO PLESSO: Verifica che il candidato si trovi nello stesso plesso dell'assente
+          const classeStr = (slotCorrente.classe || '').toUpperCase();
+          const isDisp = slotCorrente.tipologia === 'A DISPOSIZIONE' || classeStr.includes('DISP') || classeStr === 'D';
+          const isPot = slotCorrente.tipologia === 'POTENZIAMENTO' || classeStr.includes('POT') || classeStr === 'P';
+
           const isStessoPlesso = slotCorrente.plesso === slot.plesso;
 
-          if (classiCorrispondono(slotCorrente.classe, slot.classe)) {
+          if (!isDisp && !isPot && classiCorrispondono(slotCorrente.classe, slot.classe)) {
               potentialSubstitutes.push({
                   id_cand: `${slotCorrente.docente}-SOST`,
                   docente: slotCorrente.docente,
@@ -261,19 +361,36 @@ export default function DashboardPage({ user, userRole }) {
                   score: 100
               });
           }
-          // Per Potenziamento/Disposizione, accettiamo SOLO docenti fisicamente nello stesso plesso
-          else if (isStessoPlesso && (slotCorrente.tipologia === 'A DISPOSIZIONE' || slotCorrente.tipologia === 'POTENZIAMENTO')) {
+          else if (isStessoPlesso && (isDisp || isPot)) {
               potentialSubstitutes.push({
                   id_cand: `${slotCorrente.docente}-DISP`,
                   docente: slotCorrente.docente,
                   ruoloCandidato: slotCorrente.ruolo,
-                  motivazione: `A Disposizione / Potenziamento`,
+                  motivazione: isDisp ? `A Disposizione` : `Potenziamento`,
                   score: 80
               });
           }
       });
 
-      // Ricerca docenti Liberi (Buco orario)
+      // === CALCOLO ORE DA RECUPERARE (Permessi parziali - Recuperi già fatti) ===
+      const debitiOrari = {};
+      absentTeachers.forEach(a => {
+          if (a.tipo === 'PARZIALE') {
+              debitiOrari[a.nome] = (debitiOrari[a.nome] || 0) + (a.ore?.length || 0);
+          }
+      });
+      historicalLogs.forEach(log => {
+          if (log.modalita === 'Recupero' || log.modalita === 'Recupero Ore') {
+              debitiOrari[log.docente_sostituto] = (debitiOrari[log.docente_sostituto] || 0) - 1;
+          }
+      });
+
+      // 2. RICERCA DOCENTI "LIBERI" E "RECUPERO" - ORE CONTIGUE
+      const targetIndex = FASCIE_ORARIE_STANDARD.findIndex(f => f.orario === slot.ora);
+      const adjacentHours = [];
+      if (targetIndex > 0) adjacentHours.push(FASCIE_ORARIE_STANDARD[targetIndex - 1].orario);
+      if (targetIndex < FASCIE_ORARIE_STANDARD.length - 1) adjacentHours.push(FASCIE_ORARIE_STANDARD[targetIndex + 1].orario);
+
       const tuttiDocentiOggi = new Set(orariDelGiorno.map(s => s.docente));
       tuttiDocentiOggi.forEach(doc => {
           if (!docentiImpegnati.has(doc)) {
@@ -285,22 +402,46 @@ export default function DashboardPage({ user, userRole }) {
 
               if (!isAssenteInQuestaOra) {
                   const slotDelDocenteOggi = orariDelGiorno.filter(s => s.docente === doc);
+                  const haOraAdiacente = slotDelDocenteOggi.some(s => adjacentHours.includes(s.ora) && s.plesso === slot.plesso);
+                  const ruolo = slotDelDocenteOggi.length > 0 ? slotDelDocenteOggi[0].ruolo : 'CURRICULARE';
                   
-                  // BLOCCO PLESSO: Il docente "libero" deve avere almeno un'altra ora in quel plesso oggi
-                  const lavoraNelloStessoPlesso = slotDelDocenteOggi.some(s => s.plesso === slot.plesso);
-
-                  if (lavoraNelloStessoPlesso) {
-                      const ruolo = slotDelDocenteOggi.length > 0 ? slotDelDocenteOggi[0].ruolo : 'CURRICULARE';
+                  const oreDaRecuperare = debitiOrari[doc] || 0;
+                  
+                  if (oreDaRecuperare > 0 && slotDelDocenteOggi.some(s => s.plesso === slot.plesso)) {
+                      potentialSubstitutes.push({
+                          id_cand: `${doc}-RECUPERO`,
+                          docente: doc,
+                          ruoloCandidato: ruolo,
+                          motivazione: `Recupero Ore (${oreDaRecuperare}h da rendere)`,
+                          score: 90
+                      });
+                  } else if (haOraAdiacente) {
                       potentialSubstitutes.push({
                           id_cand: `${doc}-LIBERO`,
                           docente: doc,
                           ruoloCandidato: ruolo,
-                          motivazione: `Libero (Possibile Buco Orario)`,
+                          motivazione: `Libero (Ora contigua)`,
                           score: 50
                       });
                   }
               }
           }
+      });
+
+      // 3. AGGIUNTA OPZIONI DI EMERGENZA (Variazioni di orario)
+      potentialSubstitutes.push({
+          id_cand: `VAR-USCITA`,
+          docente: 'USCITA ANTICIPATA',
+          ruoloCandidato: 'VARIAZIONE',
+          motivazione: `Avvisare le famiglie`,
+          score: 0
+      });
+      potentialSubstitutes.push({
+          id_cand: `VAR-INGRESSO`,
+          docente: 'INGRESSO POSTICIPATO',
+          ruoloCandidato: 'VARIAZIONE',
+          motivazione: `Avvisare le famiglie`,
+          score: 0
       });
 
       const uniqueCandsMap = new Map();
@@ -310,6 +451,69 @@ export default function DashboardPage({ user, userRole }) {
           }
       });
       setCandidates(Array.from(uniqueCandsMap.values()).sort((a, b) => b.score - a.score));
+
+      // 4. RICERCA INCASTRI INTELLIGENTI (Zero Costi)
+      const incastriPossibili = [];
+      const orariClasse = orariDelGiorno.filter(s => classiCorrispondono(s.classe, slot.classe) && s.ora !== slot.ora);
+      
+      orariClasse.forEach(oraSpostabile => {
+          const doc = oraSpostabile.docente;
+          const docLibero = !orariDelGiorno.some(s => s.docente === doc && s.ora === slot.ora);
+          const docAssente = activeAbsences.some(a => a.nome === doc && (a.tipo === 'INTERA' || a.ore.includes(slot.ora)));
+          const docGiaSostitutoOggi = substitutionsLog.some(log => log.dataISO === targetDateStr && log.docente_sostituto === doc && log.ora === slot.ora);
+
+          if (docLibero && !docAssente && !docGiaSostitutoOggi) {
+              let bestCand = null;
+              let bestScore = -1;
+
+              orariDelGiorno.forEach(cand => {
+                  if (cand.docente === doc) return;
+                  if (cand.ora !== oraSpostabile.ora) return;
+                  if (substitutionsLog.some(log => log.dataISO === targetDateStr && log.docente_sostituto === cand.docente && log.ora === oraSpostabile.ora)) return;
+
+                  const candAssente = activeAbsences.some(a => a.nome === cand.docente && (a.tipo === 'INTERA' || a.ore.includes(oraSpostabile.ora)));
+                  if (candAssente) return;
+
+                  const isDisp = cand.tipologia === 'A DISPOSIZIONE' || cand.classe.includes('DISP');
+                  const isPot = cand.tipologia === 'POTENZIAMENTO' || cand.classe.includes('POT');
+                  const isStessoPlesso = cand.plesso === slot.plesso;
+
+                  if (isStessoPlesso && (isDisp || isPot)) {
+                      const s = isDisp ? 85 : 80;
+                      if (s > bestScore) { bestScore = s; bestCand = { ...cand, m: isDisp ? 'A Disposizione' : 'Potenziamento' }; }
+                  } else if (classiCorrispondono(cand.classe, slot.classe)) {
+                      if (100 > bestScore) { bestScore = 100; bestCand = { ...cand, m: 'Compresenza' }; }
+                  }
+              });
+
+              if (bestScore < 90) {
+                  const liberi = new Set(orariDelGiorno.map(s => s.docente));
+                  orariDelGiorno.filter(s => s.ora === oraSpostabile.ora).forEach(s => liberi.delete(s.docente));
+                  activeAbsences.forEach(a => { if (a.tipo === 'INTERA' || a.ore.includes(oraSpostabile.ora)) liberi.delete(a.nome); });
+                  substitutionsLog.filter(log => log.dataISO === targetDateStr).forEach(log => liberi.delete(log.docente_sostituto));
+                  
+                  liberi.forEach(lCand => {
+                      if (debitiOrari[lCand] > 0 && orariDelGiorno.some(s => s.docente === lCand && s.plesso === slot.plesso)) {
+                          if (90 > bestScore) {
+                              bestScore = 90;
+                              bestCand = { docente: lCand, m: `Recupero Ore (${debitiOrari[lCand]}h)` };
+                          }
+                      }
+                  });
+              }
+
+              if (bestCand) {
+                  incastriPossibili.push({
+                      docSpostato: doc,
+                      daOra: oraSpostabile.ora,
+                      adOra: slot.ora,
+                      copertura: bestCand.docente,
+                      motivazioneCopertura: bestCand.m
+                  });
+              }
+          }
+      });
+      setIncastri(incastriPossibili);
   };
 
   const assignSubstitute = async (candidato) => {
@@ -317,11 +521,15 @@ export default function DashboardPage({ user, userRole }) {
       
       if (candidato.score === 100) {
           modalitaBreve = candidato.ruoloCandidato === 'SOSTEGNO' ? "Compresenza (Sostegno)" : "Compresenza";
+      } else if (candidato.score === 90) {
+          modalitaBreve = "Recupero";
       } else if (candidato.score === 80) {
           if (candidato.motivazione.toUpperCase().includes('POTENZIAMENTO')) modalitaBreve = "Potenziamento";
           else modalitaBreve = "A Disposizione";
-      } else if (candidato.ruoloCandidato === 'SOSTEGNO') {
+      } else if (candidato.score === 50 && candidato.ruoloCandidato === 'SOSTEGNO') {
           modalitaBreve = "A Pagamento (Sostegno)";
+      } else if (candidato.score === 0) {
+          modalitaBreve = "Variazione Orario"; 
       }
 
       const newLog = {
@@ -346,10 +554,81 @@ export default function DashboardPage({ user, userRole }) {
       setActiveSlotSearch(null);
   };
 
-  const pendingDrafts = substitutionsLog.some(log => log.isDraft && log.dataISO === targetDateStr);
+  const assignManualSubstitute = async () => {
+      if (!manualSubInput.trim()) return;
+      const cleanName = cleanStr(manualSubInput);
+      
+      const newLog = {
+          id: crypto.randomUUID(),
+          originalSlotId: activeSlotSearch.id,
+          giorno: targetDay,
+          dataISO: targetDateStr,
+          ora: activeSlotSearch.ora,
+          classe: activeSlotSearch.classe,
+          docente_assente: activeSlotSearch.docente,
+          docente_sostituto: cleanName,
+          modalita: manualSubMode, 
+          responsabile_firma: userRole.nome,
+          plesso: activeSlotSearch.plesso,
+          isDraft: true
+      };
+
+      const updatedLogs = [newLog, ...substitutionsLog];
+      setSubstitutionsLog(updatedLogs);
+      setHistoricalLogs(updatedLogs);
+      await saveHistoricalLogsToCloud(updatedLogs);
+      setActiveSlotSearch(null);
+      setManualSubInput('');
+  };
+
+  const assignIncastro = async (incastro) => {
+      const log1 = {
+          id: crypto.randomUUID(),
+          originalSlotId: activeSlotSearch.id,
+          giorno: targetDay, dataISO: targetDateStr,
+          ora: activeSlotSearch.ora,
+          classe: activeSlotSearch.classe,
+          docente_assente: activeSlotSearch.docente,
+          docente_sostituto: incastro.docSpostato,
+          modalita: `Variazione (dalla ${incastro.daOra})`,
+          responsabile_firma: userRole.nome,
+          plesso: activeSlotSearch.plesso,
+          isDraft: true
+      };
+
+      const log2 = {
+          id: crypto.randomUUID(),
+          originalSlotId: "INC-" + crypto.randomUUID(),
+          giorno: targetDay, dataISO: targetDateStr,
+          ora: incastro.daOra,
+          classe: activeSlotSearch.classe,
+          docente_assente: incastro.docSpostato, 
+          docente_sostituto: incastro.copertura,
+          modalita: incastro.motivazioneCopertura.includes('Recupero') ? 'Recupero' : incastro.motivazioneCopertura,
+          responsabile_firma: userRole.nome,
+          plesso: activeSlotSearch.plesso,
+          isDraft: true
+      };
+
+      const updatedLogs = [log1, log2, ...substitutionsLog];
+      setSubstitutionsLog(updatedLogs);
+      setHistoricalLogs(updatedLogs);
+      await saveHistoricalLogsToCloud(updatedLogs);
+      setActiveSlotSearch(null);
+      setIncastri([]);
+  };
+
+  const pendingDrafts = filteredSubstitutionsLog.some(log => log.isDraft && log.dataISO === targetDateStr);
   
   const confermaSostituzioni = async () => {
-    const confirmedLogs = substitutionsLog.map(l => l.dataISO === targetDateStr ? { ...l, isDraft: false } : l);
+    const confirmedLogs = substitutionsLog.map(l => {
+      if (l.dataISO === targetDateStr && l.isDraft) {
+        if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || l.plesso === userRole?.plesso) {
+            return { ...l, isDraft: false };
+        }
+      }
+      return l;
+    });
     setSubstitutionsLog(confirmedLogs); setHistoricalLogs(confirmedLogs);
     await saveHistoricalLogsToCloud(confirmedLogs);
     alert("✅ Sostituzioni confermate e salvate in archivio!");
@@ -377,16 +656,16 @@ export default function DashboardPage({ user, userRole }) {
            window.open(`https://wa.me/?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
         }
     } else if (metodo === 'mail') {
-        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} -${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
+        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} - ${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
     } else if (metodo === 'copy') {
         navigator.clipboard.writeText(testoMessaggio).then(() => alert("Testo copiato!"));
     }
   };
 
-  // === LOGICA ASSEMBLEE CON CALCOLO ORE E AGGREGAZIONE RIPRISTINATA ===
+  // === LOGICA ASSEMBLEE CON CALCOLO ORE E AGGREGAZIONE ===
   const currentAssembly = assembliesDB.find(a => a.dataISO === assemblyDateStr) || { ore: [], docenti: [] };
   const assemblyHours = currentAssembly.ore;
-  const assemblyTeachersList = currentAssembly.docenti;
+  const assemblyTeachersList = currentAssembly.docenti; 
 
   const updateAssembly = (dataISO, ore, docenti) => {
     const otherAssemblies = assembliesDB.filter(a => a.dataISO !== dataISO);
@@ -401,6 +680,15 @@ export default function DashboardPage({ user, userRole }) {
   const addAssemblyTeacher = () => {
     if(!assemblyTeacherInput) return;
     const cleanName = cleanStr(assemblyTeacherInput);
+    
+    if (userRole?.type !== 'VICEPRESIDENZA' && userRole?.plesso !== 'TUTTI' && userRole?.type !== 'GUEST') {
+        const appartiene = scheduleDB.some(s => s.docente === cleanName && s.plesso === userRole?.plesso);
+        if (!appartiene) {
+            alert(`Operazione negata. Il docente ${cleanName} non ha ore nel plesso di ${userRole?.plesso}.`);
+            return;
+        }
+    }
+
     const newDocenti = assemblyTeachersList.includes(cleanName) ? assemblyTeachersList : [...assemblyTeachersList, cleanName];
     updateAssembly(assemblyDateStr, assemblyHours, newDocenti);
     setAssemblyTeacherInput('');
@@ -409,21 +697,18 @@ export default function DashboardPage({ user, userRole }) {
   const getAssemblyImpact = () => {
     const todaySlots = getFilteredScheduleDB().filter(s => s.giorno === assemblyDay);
 
-    // 1. Estrai gli slot dei docenti aderenti
     const affectedSlots = todaySlots.filter(s =>
         assemblyTeachersList.some(t => s.docente.includes(t)) &&
         assemblyHours.includes(s.ora) &&
         s.tipologia !== 'A DISPOSIZIONE' && s.tipologia !== 'POTENZIAMENTO'
     );
 
-    // Funzione interna per estrarre la radice della classe e accomunare Sostegno e Curriculare
     const estraiAnima = (testo) => {
         let pulito = testo.toUpperCase().replace(/[\s\.\-_]/g, '').replace(/SOSTEGNO|SOST/g, '');
         let match = pulito.match(/^(\d+[A-Z]+)/);
         return match ? match[1] : pulito;
     };
 
-    // 2. Trova i co-docenti per ogni slot usando il VERO algoritmo originale
     const slotsConStato = affectedSlots.map(slot => {
         const coTeachers = todaySlots.filter(s =>
             classiCorrispondono(s.classe, slot.classe) &&
@@ -432,49 +717,30 @@ export default function DashboardPage({ user, userRole }) {
             !assemblyTeachersList.some(t => s.docente.includes(t))
         );
 
-        return {
-            ...slot,
-            haCopertura: coTeachers.length > 0,
-            coTeachersNomi: coTeachers.map(c => c.docente).join(', ')
-        };
+        return { ...slot, haCopertura: coTeachers.length > 0, coTeachersNomi: coTeachers.map(c => c.docente).join(', ') };
     });
 
-    // 3. Raggruppamento per classe base per determinare l'ora esatta in circolare
     const gruppiClasse = {};
     slotsConStato.forEach(slot => {
         const classeBase = estraiAnima(slot.classe);
-
         if (!gruppiClasse[classeBase]) {
-            gruppiClasse[classeBase] = {
-                classeOriginale: slot.classe,
-                plesso: slot.plesso,
-                docentiAderenti: new Set(),
-                oreCoinvolte: new Set(),
-                oreScoperte: new Set(),
-                coperture: {}
-            };
+            gruppiClasse[classeBase] = { classeOriginale: slot.classe, plesso: slot.plesso, docentiAderenti: new Set(), oreCoinvolte: new Set(), oreScoperte: new Set(), coperture: {} };
         }
-        
         gruppiClasse[classeBase].docentiAderenti.add(slot.docente);
         gruppiClasse[classeBase].oreCoinvolte.add(slot.ora);
         
         if (slot.haCopertura) {
-            if (!gruppiClasse[classeBase].coperture[slot.ora]) {
-               gruppiClasse[classeBase].coperture[slot.ora] = [];
-            }
+            if (!gruppiClasse[classeBase].coperture[slot.ora]) gruppiClasse[classeBase].coperture[slot.ora] = [];
             gruppiClasse[classeBase].coperture[slot.ora].push(slot.coTeachersNomi);
         } else {
             gruppiClasse[classeBase].oreScoperte.add(slot.ora);
         }
     });
 
-    // 4. Generazione del report finale e calcolo dell'ora
     const reportFinale = [];
     Object.values(gruppiClasse).forEach(gruppo => {
         const oreScoperteArray = Array.from(gruppo.oreScoperte).sort();
-        
-        let status = '';
-        let note = '';
+        let status = ''; let note = '';
 
         if (oreScoperteArray.length === 0) {
             status = 'REGOLARE';
@@ -486,25 +752,14 @@ export default function DashboardPage({ user, userRole }) {
 
             if (firstHourStr.startsWith('08:00') || firstHourStr.startsWith('08:50')) {
                 const endTime = lastHourStr.split('-')[1];
-                status = 'INGRESSO POSTICIPATO';
-                note = `Ingresso posticipato alle ore ${endTime} (Avviso Famiglie)`;
+                status = 'INGRESSO POSTICIPATO'; note = `Ingresso posticipato alle ore ${endTime} (Avviso Famiglie)`;
             } else {
                 const startTime = firstHourStr.split('-')[0];
-                status = 'USCITA ANTICIPATA';
-                note = `Uscita anticipata alle ore ${startTime} (Avviso Famiglie)`;
+                status = 'USCITA ANTICIPATA'; note = `Uscita anticipata alle ore ${startTime} (Avviso Famiglie)`;
             }
         }
-
-        reportFinale.push({
-            classe: gruppo.classeOriginale,
-            plesso: gruppo.plesso,
-            ora: Array.from(gruppo.oreCoinvolte).sort().join(', '),
-            docente: Array.from(gruppo.docentiAderenti).join(', '),
-            status,
-            note
-        });
+        reportFinale.push({ classe: gruppo.classeOriginale, plesso: gruppo.plesso, ora: Array.from(gruppo.oreCoinvolte).sort().join(', '), docente: Array.from(gruppo.docentiAderenti).join(', '), status, note });
     });
-
     return reportFinale.sort((a,b) => a.classe.localeCompare(b.classe));
   };
 
@@ -666,7 +921,8 @@ export default function DashboardPage({ user, userRole }) {
             if (oreStessoGiorno.length > 0) {
                 slot.plesso = oreStessoGiorno[0].plesso;
             } else {
-                slot.plesso = "NICOLOSI";
+                const oreQualsiasiGiorno = flatList.filter(s => s.docente === slot.docente && s.plesso !== null);
+                slot.plesso = oreQualsiasiGiorno.length > 0 ? oreQualsiasiGiorno[0].plesso : "NICOLOSI";
             }
         }
     });
@@ -683,9 +939,17 @@ export default function DashboardPage({ user, userRole }) {
       const updatedDb = scheduleDB.map(item => {
           if(item.id === id) {
               const newClass = editValue.toUpperCase();
+              let tipologiaCalc = 'LEZIONE';
+              if (newClass.includes('DISP') || newClass === 'D') tipologiaCalc = 'A DISPOSIZIONE';
+              else if (newClass.includes('POT') || newClass === 'P') tipologiaCalc = 'POTENZIAMENTO';
+
               let plessoCalc = determinaPlessoDaClasse(newClass);
-              if(!plessoCalc) plessoCalc = "NICOLOSI";
-              return { ...item, classe: newClass, plesso: plessoCalc };
+              if(!plessoCalc) {
+                  const oreQualsiasiGiorno = scheduleDB.filter(s => s.docente === item.docente && s.plesso !== null && s.id !== id);
+                  plessoCalc = oreQualsiasiGiorno.length > 0 ? oreQualsiasiGiorno[0].plesso : item.plesso; 
+              }
+              
+              return { ...item, classe: newClass, plesso: plessoCalc || "NICOLOSI", tipologia: tipologiaCalc };
           }
           return item;
       });
@@ -728,6 +992,7 @@ export default function DashboardPage({ user, userRole }) {
           <button onClick={() => setActiveTab('DASHBOARD')} className={`py-3 px-2 font-bold text-sm border-b-4 transition-colors ${activeTab === 'DASHBOARD' ? 'border-teal-400 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Sostituzioni</button>
           <button onClick={() => setActiveTab('ASSEMBLEE')} className={`py-3 px-2 font-bold text-sm border-b-4 transition-colors ${activeTab === 'ASSEMBLEE' ? 'border-teal-400 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Gestione Assemblee</button>
           <button onClick={() => setActiveTab('STORICO')} className={`py-3 px-2 font-bold text-sm border-b-4 transition-colors ${activeTab === 'STORICO' ? 'border-teal-400 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Archivio Storico</button>
+          <button onClick={() => setActiveTab('RENDICONTAZIONE')} className={`py-3 px-2 font-bold text-sm border-b-4 transition-colors ${activeTab === 'RENDICONTAZIONE' ? 'border-teal-400 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Rendiconto Pagamenti</button>
           {userRole?.type === 'VICEPRESIDENZA' && (
             <button onClick={() => setActiveTab('DATABASE')} className={`py-3 px-2 font-bold text-sm border-b-4 transition-colors ${activeTab === 'DATABASE' ? 'border-teal-400 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Database Orari</button>
           )}
@@ -740,39 +1005,56 @@ export default function DashboardPage({ user, userRole }) {
         {activeTab === 'DASHBOARD' && (
            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
-              {/* CARD 1: ASSENZE */}
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 lg:col-span-1 h-fit print:hidden">
-                 <h3 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-2 mb-4">1. Docenti Assenti</h3>
-                 <input type="date" value={targetDateStr} onChange={(e) => setTargetDateStr(e.target.value)} className="w-full p-2 border border-gray-300 rounded mb-4 focus:outline-none focus:border-teal-500" />
+              {/* CARD 1: ASSENZE E BUDGET*/}
+              <div className="lg:col-span-1 h-fit print:hidden">
                  
-                 <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4">
-                     <label className="block text-xs font-bold text-gray-600 mb-2 uppercase">Aggiungi Assenza (Cognome)</label>
-                     <div className="flex mb-3">
-                        <input type="text" placeholder="ES. ROSSI" value={absentInput} onChange={(e) => setAbsentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAbsentTeacher()} className="flex-1 p-2 border border-gray-300 rounded-l uppercase focus:outline-none focus:border-teal-500" />
-                        <button onClick={addAbsentTeacher} className="bg-teal-500 text-white px-4 rounded-r font-bold hover:bg-teal-600">+</button>
-                     </div>
-                     <div className="flex bg-white border border-gray-300 rounded-md overflow-hidden mb-2">
-                        <button onClick={() => setAbsenceMode('INTERA')} className={`flex-1 text-xs py-2 font-bold ${absenceMode === 'INTERA' ? 'bg-teal-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Tutto il giorno</button>
-                        <button onClick={() => setAbsenceMode('PARZIALE')} className={`flex-1 text-xs py-2 font-bold ${absenceMode === 'PARZIALE' ? 'bg-teal-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Permesso</button>
-                     </div>
-                     {absenceMode === 'PARZIALE' && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                           {FASCIE_ORARIE_STANDARD.map(f => (
-                              <button key={f.orario} onClick={() => togglePartialHour(f.orario)} className={`px-2 py-1 text-xs font-bold rounded ${selectedPartialHours.includes(f.orario) ? 'bg-teal-500 text-white' : 'bg-white border border-gray-300 text-gray-600'}`}>{f.label}</button>
-                           ))}
+                 {/* Widget Budget Countdown */}
+                 {userRole?.plesso !== 'TUTTI' && userRole?.plesso !== 'NESSUNO' && (
+                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6 flex justify-between items-center border-l-4 border-l-teal-500">
+                        <div>
+                            <h3 className="text-md font-bold text-gray-800">Budget Ore a Pagamento</h3>
+                            <p className="text-xs text-gray-500 mt-0.5">Disponibilità per il plesso corrente</p>
                         </div>
-                     )}
-                 </div>
+                        <div className="text-right">
+                            <span className="text-2xl font-black text-gray-800">{getPlessoBudgetMax(userRole.plesso) - (budgetStats[userRole.plesso]?.usate || 0)}</span>
+                            <span className="text-sm font-bold text-gray-500 ml-1">/ {getPlessoBudgetMax(userRole.plesso)}</span>
+                        </div>
+                     </div>
+                 )}
 
-                 {activeAbsences.map(t => (
-                    <div key={t.id} className="flex justify-between items-center bg-white border-l-4 border-red-500 shadow-sm p-2 mb-2 rounded-r">
-                       <div>
-                          <span className="font-bold text-sm block text-gray-800">{t.nome}</span>
-                          <span className="text-[10px] text-gray-500">{t.tipo === 'INTERA' ? 'Tutto il giorno' : 'Permesso Parziale'}</span>
-                       </div>
-                       <button onClick={() => setAbsentTeachers(absentTeachers.filter(a => a.id !== t.id))} className="text-red-400 hover:text-red-600 font-bold px-2 text-lg">&times;</button>
-                    </div>
-                 ))}
+                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                     <h3 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-2 mb-4">1. Docenti Assenti</h3>
+                     <input type="date" value={targetDateStr} onChange={(e) => setTargetDateStr(e.target.value)} className="w-full p-2 border border-gray-300 rounded mb-4 focus:outline-none focus:border-teal-500" />
+                     
+                     <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4">
+                         <label className="block text-xs font-bold text-gray-600 mb-2 uppercase">Aggiungi Assenza (Cognome)</label>
+                         <div className="flex mb-3">
+                            <input type="text" placeholder="ES. ROSSI" value={absentInput} onChange={(e) => setAbsentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAbsentTeacher()} className="flex-1 p-2 border border-gray-300 rounded-l uppercase focus:outline-none focus:border-teal-500" />
+                            <button onClick={addAbsentTeacher} className="bg-teal-500 text-white px-4 rounded-r font-bold hover:bg-teal-600">+</button>
+                         </div>
+                         <div className="flex bg-white border border-gray-300 rounded-md overflow-hidden mb-2">
+                            <button onClick={() => setAbsenceMode('INTERA')} className={`flex-1 text-xs py-2 font-bold ${absenceMode === 'INTERA' ? 'bg-teal-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Tutto il giorno</button>
+                            <button onClick={() => setAbsenceMode('PARZIALE')} className={`flex-1 text-xs py-2 font-bold ${absenceMode === 'PARZIALE' ? 'bg-teal-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Permesso</button>
+                         </div>
+                         {absenceMode === 'PARZIALE' && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                               {FASCIE_ORARIE_STANDARD.map(f => (
+                                  <button key={f.orario} onClick={() => togglePartialHour(f.orario)} className={`px-2 py-1 text-xs font-bold rounded ${selectedPartialHours.includes(f.orario) ? 'bg-teal-500 text-white' : 'bg-white border border-gray-300 text-gray-600'}`}>{f.label}</button>
+                               ))}
+                            </div>
+                         )}
+                     </div>
+
+                     {filteredActiveAbsences.map(t => (
+                        <div key={t.id} className="flex justify-between items-center bg-white border-l-4 border-red-500 shadow-sm p-2 mb-2 rounded-r">
+                           <div>
+                              <span className="font-bold text-sm block text-gray-800">{t.nome}</span>
+                              <span className="text-[10px] text-gray-500">{t.tipo === 'INTERA' ? 'Tutto il giorno' : 'Permesso Parziale'}</span>
+                           </div>
+                           <button onClick={() => syncAbsences(absentTeachers.filter(a => a.id !== t.id))} className="text-red-400 hover:text-red-600 font-bold px-2 text-lg">&times;</button>
+                        </div>
+                     ))}
+                 </div>
               </div>
 
               {/* CARD 2: TABELLONE & RICERCA CANDIDATI */}
@@ -789,10 +1071,56 @@ export default function DashboardPage({ user, userRole }) {
                           </div>
                           <button onClick={() => setActiveSlotSearch(null)} className="text-teal-600 hover:text-teal-800 font-bold text-xl leading-none">&times;</button>
                        </div>
+
+                       {/* INCASTRI INTELLIGENTI ZERO COSTI */}
+                       {incastri.length > 0 && (
+                          <div className="mb-4">
+                              <h5 className="font-bold text-teal-800 text-xs uppercase mb-2">🧩 Incastri Intelligenti (Zero Costi)</h5>
+                              <div className="bg-white rounded border border-teal-200 overflow-hidden shadow-sm">
+                                 <table className="w-full text-sm text-left">
+                                   <thead className="bg-teal-50 border-b border-teal-100">
+                                      <tr>
+                                          <th className="p-2 font-semibold text-teal-800">Sposta Docente</th>
+                                          <th className="p-2 font-semibold text-teal-800">Copertura Nuova Ora</th>
+                                          <th className="p-2 text-right font-semibold text-teal-800">Azione</th>
+                                      </tr>
+                                   </thead>
+                                   <tbody className="divide-y divide-teal-50">
+                                      {incastri.map((inc, idx) => (
+                                         <tr key={idx} className="hover:bg-teal-50/50">
+                                            <td className="p-2 text-xs">
+                                               Sposta <strong>{inc.docSpostato}</strong><br/>
+                                               dalla {inc.daOra} alla {inc.adOra}
+                                            </td>
+                                            <td className="p-2 text-xs text-gray-700">
+                                               <strong>{inc.copertura}</strong> alla {inc.daOra}<br/>
+                                               <span className="text-[10px] text-teal-600 font-bold uppercase tracking-wide">{inc.motivazioneCopertura}</span>
+                                            </td>
+                                            <td className="p-2 text-right">
+                                               <button onClick={() => assignIncastro(inc)} className="bg-teal-600 hover:bg-teal-700 text-white px-3 py-1 text-xs font-bold rounded uppercase transition-colors">Esegui Incastro</button>
+                                            </td>
+                                         </tr>
+                                      ))}
+                                   </tbody>
+                                 </table>
+                              </div>
+                          </div>
+                       )}
+
+                       {/* ASSEGNAZIONE MANUALE (Cambio Turno / Recupero) */}
+                       <div className="flex flex-col md:flex-row gap-2 mb-4 bg-white p-3 rounded border border-teal-100 shadow-sm mt-2">
+                           <input type="text" placeholder="Assegna manualmente (es. ROSSI)" value={manualSubInput} onChange={(e) => setManualSubInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && assignManualSubstitute()} className="flex-1 p-2 border border-gray-300 rounded text-sm uppercase focus:outline-none focus:border-teal-500" />
+                           <select value={manualSubMode} onChange={(e) => setManualSubMode(e.target.value)} className="p-2 border border-gray-300 rounded text-sm focus:outline-none focus:border-teal-500 bg-white">
+                               <option value="Cambio Turno">Cambio Turno</option>
+                               <option value="Recupero">Recupero Ore</option>
+                           </select>
+                           <button onClick={assignManualSubstitute} className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 font-bold text-sm rounded transition-colors">Assegna</button>
+                       </div>
+
                        <div className="max-h-[300px] overflow-y-auto bg-white rounded border border-teal-100">
                           <table className="w-full text-sm text-left">
                              <thead className="bg-teal-100/50 sticky top-0">
-                                <tr><th className="p-2 font-semibold">Candidato</th><th className="p-2 font-semibold">Motivazione</th><th className="p-2 text-right font-semibold">Sostituto</th></tr>
+                                <tr><th className="p-2 font-semibold">Candidato (Automatici)</th><th className="p-2 font-semibold">Motivazione</th><th className="p-2 text-right font-semibold">Sostituto</th></tr>
                              </thead>
                              <tbody>
                                 {candidates.map((c, i) => (
@@ -802,12 +1130,12 @@ export default function DashboardPage({ user, userRole }) {
                                          {c.ruoloCandidato === 'SOSTEGNO' && <span className="ml-1 text-[10px] text-purple-600 font-bold uppercase tracking-wide">({c.ruoloCandidato})</span>}
                                       </td>
                                       <td className="p-2 text-xs">
-                                         <span className={`px-2 py-1 rounded font-bold uppercase tracking-wide ${c.score === 100 ? 'bg-green-100 text-green-800' : c.score === 80 ? 'bg-cyan-100 text-cyan-800' : 'bg-gray-100 text-gray-600'}`}>
+                                         <span className={`px-2 py-1 rounded font-bold uppercase tracking-wide ${c.score === 100 ? 'bg-green-100 text-green-800' : c.score === 90 ? 'bg-orange-100 text-orange-800' : c.score === 80 ? 'bg-cyan-100 text-cyan-800' : c.score === 0 ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
                                             {c.motivazione}
                                          </span>
                                       </td>
                                       <td className="p-2 text-right">
-                                         <button onClick={() => assignSubstitute(c)} className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 text-xs font-bold rounded uppercase transition-colors">Assegna</button>
+                                         <button onClick={() => assignSubstitute(c)} className={`${c.score === 0 ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'} text-white px-3 py-1 text-xs font-bold rounded uppercase transition-colors`}>Assegna</button>
                                       </td>
                                    </tr>
                                 ))}
@@ -883,7 +1211,7 @@ export default function DashboardPage({ user, userRole }) {
                     <p className="text-sm mt-1 text-gray-700 capitalize">Del {formatDataEstesa(targetDateStr)}</p>
                  </div>
 
-                 {substitutionsLog.filter(l => l.dataISO === targetDateStr).length === 0 ? (
+                 {filteredSubstitutionsLog.filter(l => l.dataISO === targetDateStr).length === 0 ? (
                     <div className="py-8 text-center text-gray-400 bg-gray-50 border border-dashed border-gray-200 text-sm font-semibold print:hidden">
                        Nessuna sostituzione registrata in questa data.
                     </div>
@@ -900,7 +1228,7 @@ export default function DashboardPage({ user, userRole }) {
                           </tr>
                        </thead>
                        <tbody className="divide-y divide-gray-200 print:divide-black">
-                          {substitutionsLog.filter(l => l.dataISO === targetDateStr).sort((a,b) => a.docente_assente.localeCompare(b.docente_assente) || a.ora.localeCompare(b.ora)).map(log => (
+                          {filteredSubstitutionsLog.filter(l => l.dataISO === targetDateStr).sort((a,b) => a.docente_assente.localeCompare(b.docente_assente) || a.ora.localeCompare(b.ora)).map(log => (
                              <tr key={log.id} className="hover:bg-gray-50 print:break-inside-avoid">
                                 <td className="p-2 border-r text-red-500 font-bold print:text-black">{log.docente_assente}</td>
                                 <td className="p-2 border-r font-semibold">{log.ora}</td>
@@ -911,9 +1239,13 @@ export default function DashboardPage({ user, userRole }) {
                                    {log.modalita}
                                 </td>
                                 <td className="p-2 print:hidden flex items-center justify-center gap-1.5">
-                                   <button onClick={()=>inviaNotificaVirtual(log, 'wa')} className="bg-[#25D366] text-white hover:bg-[#128C7E] px-2 py-1.5 text-[10px] font-bold uppercase transition-colors rounded shadow-sm" title="WhatsApp Web">WA</button>
-                                   <button onClick={()=>inviaNotificaVirtual(log, 'mail')} className="bg-blue-500 text-white hover:bg-blue-600 px-2 py-1.5 text-[10px] font-bold uppercase transition-colors rounded shadow-sm" title="Email">@</button>
-                                   <button onClick={()=>inviaNotificaVirtual(log, 'copy')} className="bg-gray-200 text-gray-700 hover:bg-gray-300 px-2 py-1.5 text-[10px] font-bold uppercase transition-colors rounded shadow-sm" title="Copia Testo">Copia</button>
+                                   {log.modalita !== 'Variazione Orario' && (
+                                      <>
+                                         <button onClick={()=>inviaNotificaVirtual(log, 'wa')} className="bg-[#25D366] text-white hover:bg-[#128C7E] px-2 py-1.5 text-[10px] font-bold uppercase transition-colors rounded shadow-sm" title="WhatsApp Web">WA</button>
+                                         <button onClick={()=>inviaNotificaVirtual(log, 'mail')} className="bg-blue-500 text-white hover:bg-blue-600 px-2 py-1.5 text-[10px] font-bold uppercase transition-colors rounded shadow-sm" title="Email">@</button>
+                                         <button onClick={()=>inviaNotificaVirtual(log, 'copy')} className="bg-gray-200 text-gray-700 hover:bg-gray-300 px-2 py-1.5 text-[10px] font-bold uppercase transition-colors rounded shadow-sm" title="Copia Testo">Copia</button>
+                                      </>
+                                   )}
                                    <button onClick={() => removeLog(log.id)} className="text-red-400 hover:text-red-600 font-bold text-lg ml-2 leading-none" title="Elimina">&times;</button>
                                 </td>
                              </tr>
@@ -960,9 +1292,9 @@ export default function DashboardPage({ user, userRole }) {
                  </div>
 
                  <div className="flex flex-wrap gap-2">
-                    {assemblyTeachersList.map(t => (
+                    {filteredAssemblyTeachers.map(t => (
                        <span key={t} className="bg-white border border-gray-200 shadow-sm px-2 py-1.5 text-xs font-bold rounded flex items-center gap-2">
-                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyHours, assemblyTeachersList.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
+                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyHours, assembliesDB.find(a => a.dataISO === assemblyDateStr).docenti.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
                        </span>
                     ))}
                  </div>
@@ -1043,7 +1375,7 @@ export default function DashboardPage({ user, userRole }) {
                        <tr><th className="p-3 font-bold text-gray-600 uppercase text-xs">Data</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Plesso</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Assente</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Ora / Classe</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Sostituto</th><th className="p-3 font-bold text-gray-600 uppercase text-xs">Firma / Mod.</th></tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                       {historicalLogs.filter(log => !selectedHistoryDate || log.dataISO === selectedHistoryDate).map((log) => (
+                       {filteredHistoricalLogs.filter(log => !selectedHistoryDate || log.dataISO === selectedHistoryDate).map((log) => (
                           <tr key={log.id} className="hover:bg-gray-50">
                              <td className="p-3 font-semibold text-gray-600">{formatDataEstesa(log.dataISO)}</td>
                              <td className="p-3 font-bold text-xs">{log.plesso}</td>
@@ -1062,6 +1394,82 @@ export default function DashboardPage({ user, userRole }) {
            </div>
         )}
 
+        {/* ================= TAB RENDICONTAZIONE PAGAMENTI ================= */}
+        {activeTab === 'RENDICONTAZIONE' && (
+           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+              <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4 print:hidden">
+                 <div>
+                    <h3 className="text-lg font-bold text-gray-800">Rendicontazione Ore a Pagamento</h3>
+                    <p className="text-xs text-gray-500 font-semibold mt-1">Stato utilizzo budget per ogni plesso</p>
+                 </div>
+                 <button onClick={() => window.print()} className="bg-[#1a365d] hover:bg-[#12284c] text-white px-4 py-2 rounded text-sm font-bold shadow-sm transition-colors flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                    Stampa Rendiconto
+                 </button>
+              </div>
+
+              {renderPrintHeader()}
+              
+              <div className="hidden print:block mb-8 text-center">
+                    <h2 className="text-xl font-bold uppercase text-black">Rendicontazione Sostituzioni a Pagamento</h2>
+                    <p className="text-sm mt-1 text-gray-700 capitalize">Anno Scolastico In Corso</p>
+              </div>
+
+              {Object.entries(budgetStats).map(([plesso, data]) => {
+                  const max = data.max;
+                  return (
+                      <div key={plesso} className="mb-8 break-inside-avoid">
+                          <div className="flex justify-between items-end mb-2">
+                              <h4 className="font-bold text-lg text-teal-800">{plesso}</h4>
+                              <span className="text-sm font-bold bg-gray-100 px-3 py-1 rounded">Residuo: <span className={max - data.usate <= 5 ? 'text-red-500' : 'text-green-600'}>{max - data.usate} ore</span> / {max}</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4 print:hidden">
+                              <div className={`h-2.5 rounded-full ${data.usate >= max ? 'bg-red-500' : data.usate >= (max*0.8) ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${Math.min((data.usate / max) * 100, 100)}%` }}></div>
+                          </div>
+                          
+                          {data.logs.length > 0 ? (
+                              <table className="w-full text-sm text-left border border-gray-200 print:border-black">
+                                  <thead className="bg-gray-50 print:bg-white print:border-b-2 print:border-black">
+                                      <tr>
+                                          <th className="p-2 border-r">Data</th>
+                                          <th className="p-2 border-r">Docente Sostituto (Beneficiario)</th>
+                                          <th className="p-2 border-r">Ora / Classe</th>
+                                          <th className="p-2 border-r">Docente Assente</th>
+                                          <th className="p-2">Firma Responsabile</th>
+                                      </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200 print:divide-black">
+                                      {data.logs.sort((a,b) => new Date(a.dataISO) - new Date(b.dataISO)).map(log => (
+                                          <tr key={log.id} className="hover:bg-gray-50">
+                                              <td className="p-2 border-r font-semibold">{formatDataEstesa(log.dataISO)}</td>
+                                              <td className="p-2 border-r text-green-700 font-bold print:text-black">{log.docente_sostituto}</td>
+                                              <td className="p-2 border-r">{log.ora} in <span className="font-bold">{log.classe}</span></td>
+                                              <td className="p-2 border-r text-red-500 print:text-gray-700">{log.docente_assente}</td>
+                                              <td className="p-2 text-xs italic">{log.responsabile_firma}</td>
+                                          </tr>
+                                      ))}
+                                  </tbody>
+                              </table>
+                          ) : (
+                              <p className="text-sm text-gray-500 italic p-4 bg-gray-50 border border-dashed border-gray-200 rounded">Nessuna sostituzione a pagamento registrata per questo plesso.</p>
+                          )}
+
+                          <div className="hidden print:flex justify-between mt-12 mb-8">
+                             <div className="text-center w-56">
+                                 <span className="block text-xs font-bold uppercase">Il Responsabile di Plesso</span>
+                                 <span className="text-xs italic text-gray-700 mt-1 block">________________________</span>
+                             </div>
+                             <div className="text-center w-56">
+                                 <span className="block text-xs font-bold uppercase">VISTO: Il Dirigente Scolastico</span>
+                                 <span className="text-xs italic text-gray-700 mt-1 block">________________________</span>
+                             </div>
+                          </div>
+                      </div>
+                  );
+              })}
+           </div>
+        )}
+
         {/* ================= TAB DATABASE ORARI (VICEPRESIDENZA) ================= */}
         {activeTab === 'DATABASE' && userRole?.type === 'VICEPRESIDENZA' && (
            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
@@ -1071,6 +1479,29 @@ export default function DashboardPage({ user, userRole }) {
                     <p className="text-xs text-gray-300 mt-1">{dbMessage || "Pannello Amministratore Cloud"}</p>
                  </div>
                  <button onClick={() => { if(window.confirm("ATTENZIONE: Eliminare l'intero database orari?")) svuotaDatabaseAssoluto() }} className="border border-red-500 text-red-400 px-4 py-2 text-xs font-bold uppercase rounded hover:bg-red-500 hover:text-white transition-colors">Svuota Database</button>
+              </div>
+
+              {/* Modifica Budget per Plesso */}
+              <div className="mb-6 bg-gray-50 p-4 border border-gray-200 rounded-lg">
+                  <h4 className="font-bold text-gray-800 mb-3 uppercase text-xs">Gestione Budget Plessi</h4>
+                  <div className="flex flex-wrap gap-2">
+                      {["NICOLOSI", "PEDARA", "TRECASTAGNI", "SANTA MARIA DI LICODIA", "PATERNO'"].map(p => (
+                          <div key={p} className="bg-white border border-gray-300 rounded px-3 py-2 flex items-center gap-3 shadow-sm flex-1 min-w-[200px]">
+                              <span className="text-xs font-bold text-gray-700 w-1/2 truncate" title={p}>{p}</span>
+                              {editingBudgetPlesso === p ? (
+                                  <div className="flex gap-1 w-1/2">
+                                      <input type="number" className="w-full text-xs p-1 border border-teal-500 rounded focus:outline-none" value={budgetInputValue} onChange={(e) => setBudgetInputValue(e.target.value)} onKeyDown={(e) => { if(e.key === 'Enter'){ saveBudgetConfigToCloud({...budgetConfig, [p]: parseInt(budgetInputValue) || 0}) } }} autoFocus />
+                                      <button onClick={() => saveBudgetConfigToCloud({...budgetConfig, [p]: parseInt(budgetInputValue) || 0})} className="bg-teal-500 text-white px-2 py-1 rounded text-xs">OK</button>
+                                  </div>
+                              ) : (
+                                  <div className="flex justify-between w-1/2 items-center">
+                                      <span className="text-sm font-bold text-teal-600">{getPlessoBudgetMax(p)} <span className="text-[10px] text-gray-400">ore</span></span>
+                                      <button onClick={() => { setEditingBudgetPlesso(p); setBudgetInputValue(getPlessoBudgetMax(p)); }} className="text-gray-400 hover:text-teal-600 text-[10px] font-bold uppercase">Modifica</button>
+                                  </div>
+                              )}
+                          </div>
+                      ))}
+                  </div>
               </div>
 
               <div className="grid md:grid-cols-2 gap-4 mb-6">
