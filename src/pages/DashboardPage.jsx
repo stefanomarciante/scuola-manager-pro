@@ -363,7 +363,7 @@ export default function DashboardPage({ user, userRole }) {
 
   // === COMUNICAZIONI (WHATSAPP / EMAIL) ===
   const inviaNotificaVirtual = (log, metodo) => {
-    const testoMessaggio = `*Sostituzione - IPSSAT Chinnici*\n\nGentile Prof. ${log.docente_sostituto},\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\n\nFirma: ${log.responsabile_firma}`;
+    const testoMessaggio = `*Sostituzione - IPSSAT Chinnici*\n\nGentile Prof. ${log.docente_sostituto},\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\nModalità: ${log.modalita}\n\nFirma: ${log.responsabile_firma}`;
     const contatti = contactsDB[log.docente_sostituto] || {};
     let telefono = contatti.telefono ? contatti.telefono.replace(/\s+/g, '') : '';
     const email = contatti.email || '';
@@ -377,7 +377,7 @@ export default function DashboardPage({ user, userRole }) {
            window.open(`https://wa.me/?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
         }
     } else if (metodo === 'mail') {
-        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} - ${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
+        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} -${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
     } else if (metodo === 'copy') {
         navigator.clipboard.writeText(testoMessaggio).then(() => alert("Testo copiato!"));
     }
