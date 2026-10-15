@@ -69,11 +69,13 @@ export default function DashboardPage({ user, userRole }) {
     const classeClean = classeStr.toUpperCase().replace(/\s+/g, ' '); 
     const classeNoSpace = classeStr.toUpperCase().replace(/\s+/g, '');
 
+    // Intercetta stringhe di Potenziamento e Disposizione per assegnare il plesso
     if (classeClean.includes('POT') || classeClean.includes('DISP')) {
-        const plessiDisponibili = ["NICOLOSI", "PEDARA", "TRECASTAGNI", "SANTA MARIA DI LICODIA", "PATERNO'"];
-        for (const plesso of plessiDisponibili) {
-            if (classeClean.includes(plesso)) return plesso; 
-        }
+        if (classeClean.includes('LICODIA')) return "SANTA MARIA DI LICODIA";
+        if (classeClean.includes('PEDARA')) return "PEDARA";
+        if (classeClean.includes('TRECASTAGNI')) return "TRECASTAGNI";
+        if (classeClean.includes('PATERNO')) return "PATERNO'";
+        if (classeClean.includes('NICOLOSI')) return "NICOLOSI";
     }
 
     for (const [plesso, classiArray] of Object.entries(MAPPA_CLASSI_PLESSI)) {
@@ -640,7 +642,7 @@ export default function DashboardPage({ user, userRole }) {
     await saveHistoricalLogsToCloud(updated);
   };
 
-  /// === COMUNICAZIONI (WHATSAPP / EMAIL) ===
+  // === COMUNICAZIONI (WHATSAPP / EMAIL) ===
   const inviaNotificaVirtual = (log, metodo) => {
     const testoMessaggio = `*Sostituzione - IPSSAT Chinnici*\n\nGentile Prof. ${log.docente_sostituto},\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\nModalità: ${log.modalita}\n\nFirma: ${log.responsabile_firma}`;
     const contatti = contactsDB[log.docente_sostituto] || {};
@@ -661,7 +663,7 @@ export default function DashboardPage({ user, userRole }) {
            window.open(`https://wa.me/?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
         }
     } else if (metodo === 'mail') {
-        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} -${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
+        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} - ${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
     } else if (metodo === 'copy') {
         navigator.clipboard.writeText(testoMessaggio).then(() => alert("Testo copiato!"));
     }
