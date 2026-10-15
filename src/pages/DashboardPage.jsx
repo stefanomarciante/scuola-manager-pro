@@ -228,6 +228,15 @@ export default function DashboardPage({ user, userRole }) {
     return scheduleDB.filter(s => s.plesso === userRole?.plesso);
   };
 
+  // AUTOCOMPLETAMENTO INTELLIGENTE FILTRATO
+  const getTeacherSuggestions = (input) => {
+    if (!input || input.trim().length < 2) return [];
+    const clean = cleanStr(input);
+    const activeDb = getFilteredScheduleDB();
+    const allTeachers = Array.from(new Set(activeDb.map(s => s.docente).filter(Boolean)));
+    return allTeachers.filter(t => t.includes(clean)).sort();
+  };
+
   const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
   
   const filteredActiveAbsences = activeAbsences.filter(t => {
@@ -1035,10 +1044,21 @@ export default function DashboardPage({ user, userRole }) {
                      
                      <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4">
                          <label className="block text-xs font-bold text-gray-600 mb-2 uppercase">Aggiungi Assenza (Cognome)</label>
-                         <div className="flex mb-3">
-                            <input type="text" placeholder="ES. ROSSI" value={absentInput} onChange={(e) => setAbsentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAbsentTeacher()} className="flex-1 p-2 border border-gray-300 rounded-l uppercase focus:outline-none focus:border-teal-500" />
+                         
+                         <div className="flex mb-3 relative">
+                            <div className="flex-1 relative">
+                                <input type="text" placeholder="ES. ROSSI" value={absentInput} onChange={(e) => setAbsentInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAbsentTeacher()} className="w-full p-2 border border-gray-300 rounded-l uppercase focus:outline-none focus:border-teal-500" />
+                                {absentInput.length >= 2 && getTeacherSuggestions(absentInput).length > 0 && !(getTeacherSuggestions(absentInput).length === 1 && getTeacherSuggestions(absentInput)[0] === cleanStr(absentInput)) && (
+                                   <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto top-full left-0 mt-1">
+                                       {getTeacherSuggestions(absentInput).map(t => (
+                                           <li key={t} onClick={() => setAbsentInput(t)} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
+                                       ))}
+                                   </ul>
+                                )}
+                            </div>
                             <button onClick={addAbsentTeacher} className="bg-teal-500 text-white px-4 rounded-r font-bold hover:bg-teal-600">+</button>
                          </div>
+
                          <div className="flex bg-white border border-gray-300 rounded-md overflow-hidden mb-2">
                             <button onClick={() => setAbsenceMode('INTERA')} className={`flex-1 text-xs py-2 font-bold ${absenceMode === 'INTERA' ? 'bg-teal-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Tutto il giorno</button>
                             <button onClick={() => setAbsenceMode('PARZIALE')} className={`flex-1 text-xs py-2 font-bold ${absenceMode === 'PARZIALE' ? 'bg-teal-500 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Permesso</button>
@@ -1116,7 +1136,16 @@ export default function DashboardPage({ user, userRole }) {
 
                        {/* ASSEGNAZIONE MANUALE (Cambio Turno / Recupero) */}
                        <div className="flex flex-col md:flex-row gap-2 mb-4 bg-white p-3 rounded border border-teal-100 shadow-sm mt-2">
-                           <input type="text" placeholder="Assegna manualmente (es. ROSSI)" value={manualSubInput} onChange={(e) => setManualSubInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && assignManualSubstitute()} className="flex-1 p-2 border border-gray-300 rounded text-sm uppercase focus:outline-none focus:border-teal-500" />
+                           <div className="flex-1 relative">
+                               <input type="text" placeholder="Assegna manualmente (es. ROSSI)" value={manualSubInput} onChange={(e) => setManualSubInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && assignManualSubstitute()} className="w-full p-2 border border-gray-300 rounded text-sm uppercase focus:outline-none focus:border-teal-500" />
+                               {manualSubInput.length >= 2 && getTeacherSuggestions(manualSubInput).length > 0 && !(getTeacherSuggestions(manualSubInput).length === 1 && getTeacherSuggestions(manualSubInput)[0] === cleanStr(manualSubInput)) && (
+                                  <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto top-full left-0 mt-1">
+                                      {getTeacherSuggestions(manualSubInput).map(t => (
+                                          <li key={t} onClick={() => setManualSubInput(t)} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
+                                      ))}
+                                  </ul>
+                               )}
+                           </div>
                            <select value={manualSubMode} onChange={(e) => setManualSubMode(e.target.value)} className="p-2 border border-gray-300 rounded text-sm focus:outline-none focus:border-teal-500 bg-white">
                                <option value="Cambio Turno">Cambio Turno</option>
                                <option value="Recupero">Recupero Ore</option>
@@ -1292,8 +1321,17 @@ export default function DashboardPage({ user, userRole }) {
                  
                  <div className="bg-gray-50 p-3 rounded border border-gray-200 mb-4">
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Aggiungi Docenti Aderenti</label>
-                    <div className="flex gap-2">
-                       <input type="text" placeholder="Es. ROSSI" value={assemblyTeacherInput} onChange={(e) => setAssemblyTeacherInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAssemblyTeacher()} className="flex-1 p-2 border border-gray-300 rounded uppercase focus:outline-none focus:border-teal-500" />
+                    <div className="flex gap-2 relative">
+                       <div className="flex-1 relative">
+                           <input type="text" placeholder="Es. ROSSI" value={assemblyTeacherInput} onChange={(e) => setAssemblyTeacherInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addAssemblyTeacher()} className="w-full p-2 border border-gray-300 rounded uppercase focus:outline-none focus:border-teal-500" />
+                           {assemblyTeacherInput.length >= 2 && getTeacherSuggestions(assemblyTeacherInput).length > 0 && !(getTeacherSuggestions(assemblyTeacherInput).length === 1 && getTeacherSuggestions(assemblyTeacherInput)[0] === cleanStr(assemblyTeacherInput)) && (
+                               <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto top-full left-0 mt-1">
+                                   {getTeacherSuggestions(assemblyTeacherInput).map(t => (
+                                       <li key={t} onClick={() => setAssemblyTeacherInput(t)} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
+                                   ))}
+                               </ul>
+                           )}
+                       </div>
                        <button onClick={addAssemblyTeacher} className="bg-teal-500 hover:bg-teal-600 text-white px-4 rounded font-bold transition-colors">+</button>
                     </div>
                  </div>
