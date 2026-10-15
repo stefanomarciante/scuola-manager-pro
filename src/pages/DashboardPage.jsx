@@ -640,23 +640,28 @@ export default function DashboardPage({ user, userRole }) {
     await saveHistoricalLogsToCloud(updated);
   };
 
-  // === COMUNICAZIONI (WHATSAPP / EMAIL) ===
+  /// === COMUNICAZIONI (WHATSAPP / EMAIL) ===
   const inviaNotificaVirtual = (log, metodo) => {
     const testoMessaggio = `*Sostituzione - IPSSAT Chinnici*\n\nGentile Prof. ${log.docente_sostituto},\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\nModalità: ${log.modalita}\n\nFirma: ${log.responsabile_firma}`;
     const contatti = contactsDB[log.docente_sostituto] || {};
-    let telefono = contatti.telefono ? contatti.telefono.replace(/\s+/g, '') : '';
+    
+    // Estrae esclusivamente i caratteri numerici, eliminando +, spazi e trattini
+    let telefono = contatti.telefono ? String(contatti.telefono).replace(/\D/g, '') : ''; 
     const email = contatti.email || '';
 
     if (metodo === 'wa') {
         if (telefono) {
-           if (!telefono.startsWith('+39') && !telefono.startsWith('39')) telefono = '+39' + telefono;
-           else if (telefono.startsWith('39')) telefono = '+' + telefono;
+           // Rimuove eventuali "00" iniziali (es. 0039)
+           if (telefono.startsWith('0039')) telefono = telefono.substring(2);
+           // Assicura il prefisso italiano 39 senza inserire il simbolo +
+           if (!telefono.startsWith('39')) telefono = '39' + telefono;
+           
            window.open(`https://wa.me/${telefono}?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
         } else {
            window.open(`https://wa.me/?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
         }
     } else if (metodo === 'mail') {
-        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} - ${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
+        window.location.href = `mailto:${email}?subject=${encodeURIComponent(`Sostituzione: ${log.giorno} -${log.ora}`)}&body=${encodeURIComponent(testoMessaggio)}`;
     } else if (metodo === 'copy') {
         navigator.clipboard.writeText(testoMessaggio).then(() => alert("Testo copiato!"));
     }
