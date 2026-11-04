@@ -114,6 +114,14 @@ export default function DashboardPage({ user, userRole }) {
     return d.toLocaleDateString('it-IT', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   };
 
+  const getTeacherSuggestions = (input) => {
+    if (!input || input.trim().length < 2) return [];
+    const clean = cleanStr(input);
+    const activeDb = getFilteredScheduleDB();
+    const allTeachers = Array.from(new Set(activeDb.map(s => s.docente).filter(Boolean)));
+    return allTeachers.filter(t => t.includes(clean)).sort();
+  };
+
   // === INTESTAZIONE STAMPA CONDIVISA ===
   const renderPrintHeader = () => (
     <div className="hidden print:flex justify-between items-start mb-8 border-b-2 border-black pb-4">
@@ -228,15 +236,6 @@ export default function DashboardPage({ user, userRole }) {
     return scheduleDB.filter(s => s.plesso === userRole?.plesso);
   };
 
-  // AUTOCOMPLETAMENTO INTELLIGENTE FILTRATO
-  const getTeacherSuggestions = (input) => {
-    if (!input || input.trim().length < 2) return [];
-    const clean = cleanStr(input);
-    const activeDb = getFilteredScheduleDB();
-    const allTeachers = Array.from(new Set(activeDb.map(s => s.docente).filter(Boolean)));
-    return allTeachers.filter(t => t.includes(clean)).sort();
-  };
-
   const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
   
   const filteredActiveAbsences = activeAbsences.filter(t => {
@@ -280,7 +279,6 @@ export default function DashboardPage({ user, userRole }) {
           stats[log.plesso].logs.push(log);
       });
 
-      // Filtro per ruolo: mostra tutti alla VP, mostra solo il proprio plesso ai responsabili
       if (userRole?.type !== 'VICEPRESIDENZA' && userRole?.plesso !== 'TUTTI' && userRole?.plesso !== 'NESSUNO') {
           const filteredStats = {};
           if (stats[userRole.plesso]) filteredStats[userRole.plesso] = stats[userRole.plesso];
@@ -794,8 +792,24 @@ export default function DashboardPage({ user, userRole }) {
       for (let i = 0; i < 20; i++) batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'orari', `plessi_chunk_${i}`));
       batch.delete(doc(db, 'artifacts', appId, 'public', 'data', 'orari', 'plessi_master'));
       await batch.commit();
-      setScheduleDB([]); setDbMessage("Database svuotato.");
+      setScheduleDB([]); setDbMessage("Database svuotato interamente.");
     } catch(e) { setDbMessage("Errore: " + e.message); } finally { setIsSyncing(false); }
+  };
+
+  const svuotaDatabaseParziale = async (ruoloDaEliminare) => {
+    if(window.confirm(`ATTENZIONE: Sei sicuro di voler eliminare SOLO l'orario dei docenti di ${ruoloDaEliminare}? Gli altri orari verranno mantenuti.`)) {
+        setIsSyncing(true);
+        setDbMessage(`Eliminazione orario ${ruoloDaEliminare}...`);
+        try {
+            const nuovoDb = scheduleDB.filter(item => item.ruolo !== ruoloDaEliminare);
+            await saveDatabaseToCloud(nuovoDb);
+            setDbMessage(`Orario ${ruoloDaEliminare} eliminato.`);
+        } catch(e) { 
+            setDbMessage("Errore: " + e.message); 
+        } finally { 
+            setIsSyncing(false); 
+        }
+    }
   };
 
   const saveDatabaseToCloud = async (newScheduleArray) => {
@@ -810,7 +824,7 @@ export default function DashboardPage({ user, userRole }) {
       }
       batch.set(doc(db, 'artifacts', appId, 'public', 'data', 'orari', 'plessi_master'), { chunks: chunks, updatedAt: new Date().toISOString() });
       await batch.commit();
-      setScheduleDB(newScheduleArray); setDbMessage(`Salvato! (${newScheduleArray.length} record)`);
+      setScheduleDB(newScheduleArray); setDbMessage(`Salvato! (${newScheduleArray.length} record totali)`);
     } catch (error) { setDbMessage("Errore critico: " + error.message); } finally { setIsSyncing(false); }
   };
 
@@ -828,12 +842,12 @@ export default function DashboardPage({ user, userRole }) {
                 setDbMessage("Nessun orario estratto.");
                 return;
             }
-            if (ruolo === 'CURRICULARE') {
-                saveDatabaseToCloud(extractedSlots);
-            } else {
-                const newCombinedDb = [...scheduleDB, ...extractedSlots];
-                saveDatabaseToCloud(newCombinedDb);
-            }
+            
+            // Sostituzione Indipendente: Elimina solo il vecchio orario del ruolo che sto caricando
+            const dbSenzaRuoloVecchio = scheduleDB.filter(s => s.ruolo !== ruolo);
+            const newCombinedDb = [...dbSenzaRuoloVecchio, ...extractedSlots];
+            saveDatabaseToCloud(newCombinedDb);
+
         } catch (err) {
             alert("Errore durante l'elaborazione del CSV: " + err.message);
         } finally {
@@ -1523,7 +1537,7 @@ export default function DashboardPage({ user, userRole }) {
                     <h3 className="text-lg font-bold">Gestore Database Orari</h3>
                     <p className="text-xs text-gray-300 mt-1">{dbMessage || "Pannello Amministratore Cloud"}</p>
                  </div>
-                 <button onClick={() => { if(window.confirm("ATTENZIONE: Eliminare l'intero database orari?")) svuotaDatabaseAssoluto() }} className="border border-red-500 text-red-400 px-4 py-2 text-xs font-bold uppercase rounded hover:bg-red-500 hover:text-white transition-colors">Svuota Database</button>
+                 <button onClick={() => { if(window.confirm("ATTENZIONE: Eliminare l'intero database orari (Curriculari + Sostegno)?")) svuotaDatabaseAssoluto() }} className="border border-red-500 text-red-400 px-4 py-2 text-xs font-bold uppercase rounded hover:bg-red-500 hover:text-white transition-colors">Svuota Tutto</button>
               </div>
 
               {/* Modifica Budget per Plesso */}
@@ -1550,16 +1564,35 @@ export default function DashboardPage({ user, userRole }) {
               </div>
 
               <div className="grid md:grid-cols-2 gap-4 mb-6">
-                 <label className="border-2 border-dashed border-gray-300 p-6 bg-gray-50 text-center rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
-                    <span className="font-bold block text-gray-700">Carica CSV Curriculari</span>
-                    <span className="text-[10px] font-semibold text-gray-500 uppercase mt-1 block">Sovrascrive il DB esistente</span>
-                    <input type="file" accept=".csv" className="hidden" disabled={isSyncing} onChange={(e) => handleFileUpload(e, 'CURRICULARE')} />
-                 </label>
-                 <label className="border-2 border-dashed border-gray-300 p-6 bg-gray-50 text-center rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
-                    <span className="font-bold block text-gray-700">Carica CSV Sostegno</span>
-                    <span className="text-[10px] font-semibold text-gray-500 uppercase mt-1 block">Aggiunge al DB esistente</span>
-                    <input type="file" accept=".csv" className="hidden" disabled={isSyncing} onChange={(e) => handleFileUpload(e, 'SOSTEGNO')} />
-                 </label>
+                 {/* Card Curriculari */}
+                 <div className="border border-gray-300 p-4 bg-white rounded-lg flex flex-col justify-between shadow-sm">
+                    <div>
+                        <h4 className="font-bold text-gray-800 uppercase text-sm mb-1">Orario Curriculare</h4>
+                        <p className="text-xs text-gray-500 mb-4">I nuovi caricamenti andranno a sostituire solo l'orario curriculare esistente.</p>
+                    </div>
+                    <div className="flex gap-2 mt-auto">
+                        <label className="flex-1 bg-teal-50 hover:bg-teal-100 border border-teal-500 text-teal-700 text-center py-2 rounded cursor-pointer text-xs font-bold uppercase transition-colors">
+                           Carica CSV
+                           <input type="file" accept=".csv" className="hidden" disabled={isSyncing} onChange={(e) => handleFileUpload(e, 'CURRICULARE')} />
+                        </label>
+                        <button onClick={() => svuotaDatabaseParziale('CURRICULARE')} disabled={isSyncing} className="flex-1 bg-red-50 hover:bg-red-100 border border-red-500 text-red-600 py-2 rounded text-xs font-bold uppercase transition-colors disabled:opacity-50">Svuota Solo Curriculari</button>
+                    </div>
+                 </div>
+
+                 {/* Card Sostegno */}
+                 <div className="border border-gray-300 p-4 bg-white rounded-lg flex flex-col justify-between shadow-sm">
+                    <div>
+                        <h4 className="font-bold text-gray-800 uppercase text-sm mb-1">Orario Sostegno</h4>
+                        <p className="text-xs text-gray-500 mb-4">I nuovi caricamenti andranno a sostituire solo l'orario di sostegno esistente.</p>
+                    </div>
+                    <div className="flex gap-2 mt-auto">
+                        <label className="flex-1 bg-teal-50 hover:bg-teal-100 border border-teal-500 text-teal-700 text-center py-2 rounded cursor-pointer text-xs font-bold uppercase transition-colors">
+                           Carica CSV
+                           <input type="file" accept=".csv" className="hidden" disabled={isSyncing} onChange={(e) => handleFileUpload(e, 'SOSTEGNO')} />
+                        </label>
+                        <button onClick={() => svuotaDatabaseParziale('SOSTEGNO')} disabled={isSyncing} className="flex-1 bg-red-50 hover:bg-red-100 border border-red-500 text-red-600 py-2 rounded text-xs font-bold uppercase transition-colors disabled:opacity-50">Svuota Solo Sostegno</button>
+                    </div>
+                 </div>
               </div>
 
               {/* Sezione di Ricerca nel DB Orari */}
