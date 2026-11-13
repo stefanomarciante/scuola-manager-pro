@@ -34,6 +34,10 @@ export default function DashboardPage({ user, userRole }) {
   const [candidates, setCandidates] = useState([]);
   const [incastri, setIncastri] = useState([]);
 
+  // === STATI TOOLTIP ORARIO ===
+  const [hoveredTeacher, setHoveredTeacher] = useState(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+
   // === STATI BUDGET ===
   const [budgetConfig, setBudgetConfig] = useState({});
   const [editingBudgetPlesso, setEditingBudgetPlesso] = useState(null);
@@ -111,14 +115,6 @@ export default function DashboardPage({ user, userRole }) {
   const formatDataEstesa = (dateStr) => {
     const d = new Date(dateStr);
     return d.toLocaleDateString('it-IT', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  };
-
-  const getTeacherSuggestions = (input) => {
-    if (!input || input.trim().length < 2) return [];
-    const clean = cleanStr(input);
-    const activeDb = getFilteredScheduleDB();
-    const allTeachers = Array.from(new Set(activeDb.map(s => s.docente).filter(Boolean)));
-    return allTeachers.filter(t => t.includes(clean)).sort();
   };
 
   // Funzioni utilitarie per il tempo (Assembly)
@@ -241,10 +237,17 @@ export default function DashboardPage({ user, userRole }) {
   };
 
   // === FILTRI DI PLESSO PER LA VISUALIZZAZIONE ===
-  
   const getFilteredScheduleDB = () => {
     if (userRole?.type === 'VICEPRESIDENZA' || userRole?.plesso === 'TUTTI' || userRole?.type === 'GUEST') return scheduleDB;
     return scheduleDB.filter(s => s.plesso === userRole?.plesso);
+  };
+
+  const getTeacherSuggestions = (input) => {
+    if (!input || input.trim().length < 2) return [];
+    const clean = cleanStr(input);
+    const activeDb = getFilteredScheduleDB();
+    const allTeachers = Array.from(new Set(activeDb.map(s => s.docente).filter(Boolean)));
+    return allTeachers.filter(t => t.includes(clean)).sort();
   };
 
   const activeAbsences = absentTeachers.filter(t => t.dataISO === targetDateStr);
@@ -299,6 +302,57 @@ export default function DashboardPage({ user, userRole }) {
       return stats;
   };
   const budgetStats = getBudgetStats();
+
+  // === TOOLTIP HANDLERS ===
+  const handleMouseMove = (e, docente) => {
+      if (!docente || docente === 'USCITA ANTICIPATA' || docente === 'INGRESSO POSTICIPATO') return;
+      setHoveredTeacher(docente);
+      setTooltipPos({ x: e.clientX, y: e.clientY });
+  };
+  const handleMouseLeave = () => {
+      setHoveredTeacher(null);
+  };
+
+  const renderTeacherTooltip = () => {
+    if (!hoveredTeacher || hoveredTeacher === 'USCITA ANTICIPATA' || hoveredTeacher === 'INGRESSO POSTICIPATO') return null;
+    const tSlots = scheduleDB.filter(s => s.docente === hoveredTeacher);
+    const days = ['LUNEDI', 'MARTEDI', 'MERCOLEDI', 'GIOVEDI', 'VENERDI', 'SABATO'];
+    
+    const safeX = tooltipPos.x + 300 > window.innerWidth ? tooltipPos.x - 310 : tooltipPos.x + 15;
+    const safeY = tooltipPos.y + 180 > window.innerHeight ? tooltipPos.y - 190 : tooltipPos.y + 15;
+
+    return (
+      <div 
+        className="fixed bg-white border-2 border-teal-500 shadow-2xl p-3 rounded-lg z-[9999] pointer-events-none w-72"
+        style={{ top: safeY, left: safeX }}
+      >
+        <div className="flex justify-between items-center border-b border-teal-100 pb-1 mb-2">
+          <h4 className="font-bold text-teal-900 text-xs uppercase">{hoveredTeacher}</h4>
+          <span className="text-[10px] font-bold bg-teal-50 text-teal-700 px-1.5 py-0.5 rounded">Orario Settimanale</span>
+        </div>
+        <div className="text-[11px] space-y-1.5 leading-tight">
+          {days.map(d => {
+            const daySlots = tSlots.filter(s => s.giorno === d).sort((a,b) => a.ora.localeCompare(b.ora));
+            if (daySlots.length === 0) return null;
+            const isTargetDay = d === targetDay;
+            return (
+              <div key={d} className={`flex gap-2 p-1 rounded ${isTargetDay ? 'bg-teal-50 font-semibold' : ''}`}>
+                <span className={`font-bold w-8 ${isTargetDay ? 'text-teal-700' : 'text-gray-700'}`}>{d.substring(0,3)}:</span>
+                <span className="text-gray-600 flex-1">
+                  {daySlots.map(s => {
+                     const fascia = FASCIE_ORARIE_STANDARD.find(f => f.orario === s.ora);
+                     const oraLabel = fascia ? fascia.label : s.ora.substring(0,5);
+                     return `${oraLabel}(${s.classe})`;
+                  }).join(', ')}
+                </span>
+              </div>
+            )
+          })}
+          {tSlots.length === 0 && <p className="text-gray-400 italic">Nessun orario caricato</p>}
+        </div>
+      </div>
+    );
+  };
 
   // === LOGICA ASSENZE E SOSTITUZIONI ===
   const togglePartialHour = (orarioStr) => {
@@ -572,6 +626,7 @@ export default function DashboardPage({ user, userRole }) {
       setHistoricalLogs(updatedLogs);
       await saveHistoricalLogsToCloud(updatedLogs);
       setActiveSlotSearch(null);
+      setHoveredTeacher(null);
   };
 
   const assignManualSubstitute = async () => {
@@ -599,6 +654,7 @@ export default function DashboardPage({ user, userRole }) {
       await saveHistoricalLogsToCloud(updatedLogs);
       setActiveSlotSearch(null);
       setManualSubInput('');
+      setHoveredTeacher(null);
   };
 
   const assignIncastro = async (incastro) => {
@@ -636,6 +692,7 @@ export default function DashboardPage({ user, userRole }) {
       await saveHistoricalLogsToCloud(updatedLogs);
       setActiveSlotSearch(null);
       setIncastri([]);
+      setHoveredTeacher(null);
   };
 
   const pendingDrafts = filteredSubstitutionsLog.some(log => log.isDraft && log.dataISO === targetDateStr);
@@ -717,7 +774,6 @@ export default function DashboardPage({ user, userRole }) {
     
     const aStartMins = timeToMins(assemblyStartTime);
     let aEndMins = timeToMins(assemblyEndTime);
-    // Abbuono 20 minuti: se l'assemblea finisce alle 14:00, la consideriamo fino alle 14:20
     if (assemblyEndTime === '14:00') aEndMins = 860; 
 
     const estraiAnima = (testo) => {
@@ -728,7 +784,6 @@ export default function DashboardPage({ user, userRole }) {
 
     const gruppiClasse = {};
     
-    // Raggruppamento dell'intero orario giornaliero della classe
     todaySlots.forEach(slot => {
         if (slot.tipologia === 'A DISPOSIZIONE' || slot.tipologia === 'POTENZIAMENTO') return;
         const classeBase = estraiAnima(slot.classe);
@@ -753,7 +808,6 @@ export default function DashboardPage({ user, userRole }) {
         
         const uncoveredIntervals = [];
 
-        // Identifica orari e coperture per ogni singolo slot della giornata
         classSlots.forEach(slot => {
             const [sStartStr, sEndStr] = slot.ora.split('-');
             const sStart = timeToMins(sStartStr);
@@ -762,14 +816,12 @@ export default function DashboardPage({ user, userRole }) {
             if (sStart < classStartOfDay) classStartOfDay = sStart;
             if (sEnd > classEndOfDay) classEndOfDay = sEnd;
             
-            // Il docente partecipa e c'è intersezione reale tra la sua lezione e l'assemblea?
             const teacherAderisce = assemblyTeachersList.some(t => slot.docente.includes(t));
             const isOverlapping = teacherAderisce && sStart < aEndMins && sEnd > aStartMins;
             
             if (isOverlapping) {
                 gruppo.docentiAderenti.add(slot.docente);
                 
-                // Ricerca compresenza/sostegno NON in assemblea per la medesima ora
                 const coTeachers = classSlots.filter(c => 
                     c.id !== slot.id && 
                     c.ora === slot.ora && 
@@ -780,7 +832,6 @@ export default function DashboardPage({ user, userRole }) {
                     if (!gruppo.coperture[slot.ora]) gruppo.coperture[slot.ora] = [];
                     gruppo.coperture[slot.ora].push(coTeachers.map(c => c.docente).join(', '));
                 } else {
-                    // Salva la porzione ESATTA di minuti scoperti
                     uncoveredIntervals.push({
                         start: Math.max(sStart, aStartMins),
                         end: Math.min(sEnd, aEndMins)
@@ -789,10 +840,8 @@ export default function DashboardPage({ user, userRole }) {
             }
         });
 
-        // Se nessuno in questa classe è andato in assemblea, salta il resoconto
         if (gruppo.docentiAderenti.size === 0) return;
 
-        // Fonde gli intervalli scoperti che si toccano (es. 08:00-09:40 + 09:40-11:00 = 08:00-11:00)
         uncoveredIntervals.sort((a,b) => a.start - b.start);
         let merged = [];
         for (let inter of uncoveredIntervals) {
@@ -819,7 +868,6 @@ export default function DashboardPage({ user, userRole }) {
             let ingresso = null;
             let uscita = null;
             
-            // Cerca se l'intervallo scoperto tocca il primo o l'ultimo minuto di lezione della classe
             let firstBlock = merged.find(b => b.start <= classStartOfDay);
             if (firstBlock) ingresso = firstBlock.end;
             
@@ -1077,7 +1125,9 @@ export default function DashboardPage({ user, userRole }) {
   const paginatedDbRows = filteredDbRows.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] font-sans text-gray-800 print:bg-white">
+    <div className="min-h-screen bg-[#f8f9fa] font-sans text-gray-800 print:bg-white relative">
+      {renderTeacherTooltip()}
+      
       {/* HEADER ISTITUZIONALE E NAVIGAZIONE */}
       <header className="bg-white px-6 py-4 flex justify-between items-center shadow-sm border-b border-gray-200 print:hidden">
         <div className="flex items-center space-x-4">
@@ -1144,7 +1194,7 @@ export default function DashboardPage({ user, userRole }) {
                                 {absentInput.length >= 2 && getTeacherSuggestions(absentInput).length > 0 && !(getTeacherSuggestions(absentInput).length === 1 && getTeacherSuggestions(absentInput)[0] === cleanStr(absentInput)) && (
                                    <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto top-full left-0 mt-1">
                                        {getTeacherSuggestions(absentInput).map(t => (
-                                           <li key={t} onClick={() => setAbsentInput(t)} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
+                                           <li key={t} onClick={() => { setAbsentInput(t); handleMouseLeave(); }} onMouseMove={(e) => handleMouseMove(e, t)} onMouseLeave={handleMouseLeave} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
                                        ))}
                                    </ul>
                                 )}
@@ -1168,7 +1218,7 @@ export default function DashboardPage({ user, userRole }) {
                      {filteredActiveAbsences.map(t => (
                         <div key={t.id} className="flex justify-between items-center bg-white border-l-4 border-red-500 shadow-sm p-2 mb-2 rounded-r">
                            <div>
-                              <span className="font-bold text-sm block text-gray-800">{t.nome}</span>
+                              <span className="font-bold text-sm block text-gray-800 cursor-help border-b border-dashed border-gray-300 w-fit" onMouseMove={(e) => handleMouseMove(e, t.nome)} onMouseLeave={handleMouseLeave}>{t.nome}</span>
                               <span className="text-[10px] text-gray-500">{t.tipo === 'INTERA' ? 'Tutto il giorno' : 'Permesso Parziale'}</span>
                            </div>
                            <button onClick={() => syncAbsences(absentTeachers.filter(a => a.id !== t.id))} className="text-red-400 hover:text-red-600 font-bold px-2 text-lg">&times;</button>
@@ -1186,10 +1236,12 @@ export default function DashboardPage({ user, userRole }) {
                     <div className="bg-teal-50 p-4 rounded-lg border border-teal-200 mb-4 animate-fadeIn">
                        <div className="flex justify-between items-start mb-3 border-b border-teal-100 pb-2">
                           <div>
-                             <h4 className="font-bold text-teal-800">Trova sostituto per: {activeSlotSearch.docente}</h4>
+                             <h4 className="font-bold text-teal-800">
+                               Trova sostituto per: <span className="cursor-help border-b border-dashed border-teal-600" onMouseMove={(e) => handleMouseMove(e, activeSlotSearch.docente)} onMouseLeave={handleMouseLeave}>{activeSlotSearch.docente}</span>
+                             </h4>
                              <p className="text-sm text-teal-600">Ora: {activeSlotSearch.ora} | Classe: <strong>{activeSlotSearch.classe}</strong></p>
                           </div>
-                          <button onClick={() => setActiveSlotSearch(null)} className="text-teal-600 hover:text-teal-800 font-bold text-xl leading-none">&times;</button>
+                          <button onClick={() => { setActiveSlotSearch(null); handleMouseLeave(); }} className="text-teal-600 hover:text-teal-800 font-bold text-xl leading-none">&times;</button>
                        </div>
 
                        {/* INCASTRI INTELLIGENTI ZERO COSTI */}
@@ -1209,11 +1261,11 @@ export default function DashboardPage({ user, userRole }) {
                                       {incastri.map((inc, idx) => (
                                          <tr key={idx} className="hover:bg-teal-50/50">
                                             <td className="p-2 text-xs">
-                                               Sposta <strong>{inc.docSpostato}</strong><br/>
+                                               Sposta <strong className="cursor-help text-teal-700 border-b border-dashed border-teal-400 pb-0.5" onMouseMove={(e) => handleMouseMove(e, inc.docSpostato)} onMouseLeave={handleMouseLeave}>{inc.docSpostato}</strong><br/>
                                                dalla {inc.daOra} alla {inc.adOra}
                                             </td>
                                             <td className="p-2 text-xs text-gray-700">
-                                               <strong>{inc.copertura}</strong> alla {inc.daOra}<br/>
+                                               <strong className="cursor-help text-teal-700 border-b border-dashed border-teal-400 pb-0.5" onMouseMove={(e) => handleMouseMove(e, inc.copertura)} onMouseLeave={handleMouseLeave}>{inc.copertura}</strong> alla {inc.daOra}<br/>
                                                <span className="text-[10px] text-teal-600 font-bold uppercase tracking-wide">{inc.motivazioneCopertura}</span>
                                             </td>
                                             <td className="p-2 text-right">
@@ -1234,7 +1286,7 @@ export default function DashboardPage({ user, userRole }) {
                                {manualSubInput.length >= 2 && getTeacherSuggestions(manualSubInput).length > 0 && !(getTeacherSuggestions(manualSubInput).length === 1 && getTeacherSuggestions(manualSubInput)[0] === cleanStr(manualSubInput)) && (
                                   <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto top-full left-0 mt-1">
                                       {getTeacherSuggestions(manualSubInput).map(t => (
-                                          <li key={t} onClick={() => setManualSubInput(t)} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
+                                          <li key={t} onClick={() => { setManualSubInput(t); handleMouseLeave(); }} onMouseMove={(e) => handleMouseMove(e, t)} onMouseLeave={handleMouseLeave} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
                                       ))}
                                   </ul>
                                )}
@@ -1255,7 +1307,7 @@ export default function DashboardPage({ user, userRole }) {
                                 {candidates.map((c, i) => (
                                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                                       <td className="p-2 font-bold text-gray-800">
-                                         {c.docente}
+                                         <span className={c.ruoloCandidato !== 'VARIAZIONE' ? "cursor-help border-b border-dashed border-gray-400 pb-0.5 hover:text-teal-700" : ""} onMouseMove={(e) => handleMouseMove(e, c.docente)} onMouseLeave={handleMouseLeave}>{c.docente}</span>
                                          {c.ruoloCandidato === 'SOSTEGNO' && <span className="ml-1 text-[10px] text-purple-600 font-bold uppercase tracking-wide">({c.ruoloCandidato})</span>}
                                       </td>
                                       <td className="p-2 text-xs">
@@ -1294,11 +1346,13 @@ export default function DashboardPage({ user, userRole }) {
                                    return (
                                       <tr key={slot.id} className="hover:bg-gray-50">
                                          <td className="p-3 font-semibold text-gray-700">{slot.ora}</td>
-                                         <td className="p-3 font-bold text-red-500">{slot.docente}</td>
+                                         <td className="p-3 font-bold text-red-500">
+                                            <span className="cursor-help border-b border-dashed border-red-300 pb-0.5" onMouseMove={(e) => handleMouseMove(e, slot.docente)} onMouseLeave={handleMouseLeave}>{slot.docente}</span>
+                                         </td>
                                          <td className="p-3 font-bold text-gray-800">{slot.classe}</td>
                                          <td className="p-3 text-right">
                                             {log ? (
-                                               <span className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-bold">{log.docente_sostituto}</span>
+                                               <span className="bg-green-100 text-green-700 px-3 py-1 rounded text-xs font-bold cursor-help" onMouseMove={(e) => handleMouseMove(e, log.docente_sostituto)} onMouseLeave={handleMouseLeave}>{log.docente_sostituto}</span>
                                             ) : userRole?.type !== 'GUEST' ? (
                                                <button onClick={() => openCandidateSearch(slot)} className="text-teal-600 border border-teal-500 hover:bg-teal-500 hover:text-white px-3 py-1 rounded text-xs font-bold transition-colors">Trova</button>
                                             ) : (
@@ -1428,7 +1482,7 @@ export default function DashboardPage({ user, userRole }) {
                            {assemblyTeacherInput.length >= 2 && getTeacherSuggestions(assemblyTeacherInput).length > 0 && !(getTeacherSuggestions(assemblyTeacherInput).length === 1 && getTeacherSuggestions(assemblyTeacherInput)[0] === cleanStr(assemblyTeacherInput)) && (
                                <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded shadow-lg max-h-40 overflow-y-auto top-full left-0 mt-1">
                                    {getTeacherSuggestions(assemblyTeacherInput).map(t => (
-                                       <li key={t} onClick={() => setAssemblyTeacherInput(t)} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
+                                       <li key={t} onClick={() => { setAssemblyTeacherInput(t); handleMouseLeave(); }} onMouseMove={(e) => handleMouseMove(e, t)} onMouseLeave={handleMouseLeave} className="p-2 text-xs cursor-pointer hover:bg-teal-50 text-gray-700 font-bold uppercase border-b border-gray-100 last:border-0">{t}</li>
                                    ))}
                                </ul>
                            )}
@@ -1440,7 +1494,8 @@ export default function DashboardPage({ user, userRole }) {
                  <div className="flex flex-wrap gap-2">
                     {filteredAssemblyTeachers.map(t => (
                        <span key={t} className="bg-white border border-gray-200 shadow-sm px-2 py-1.5 text-xs font-bold rounded flex items-center gap-2">
-                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyStartTime, assemblyEndTime, assembliesDB.find(a => a.dataISO === assemblyDateStr).docenti.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
+                          <span className="cursor-help" onMouseMove={(e) => handleMouseMove(e, t)} onMouseLeave={handleMouseLeave}>{t}</span>
+                          <button onClick={() => updateAssembly(assemblyDateStr, assemblyStartTime, assemblyEndTime, assembliesDB.find(a => a.dataISO === assemblyDateStr).docenti.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
                        </span>
                     ))}
                  </div>
@@ -1732,7 +1787,8 @@ export default function DashboardPage({ user, userRole }) {
                           {paginatedDbRows.map((row) => (
                               <tr key={row.id} className="hover:bg-gray-50">
                                   <td className="px-3 py-2 font-bold text-[#333333]">
-                                      {row.docente} {contactsDB[row.docente] && <span className="text-[10px] text-[#25D366] ml-1" title="Contatto in rubrica">💬</span>}
+                                      <span className="cursor-help" onMouseMove={(e) => handleMouseMove(e, row.docente)} onMouseLeave={handleMouseLeave}>{row.docente}</span>
+                                      {contactsDB[row.docente] && <span className="text-[10px] text-[#25D366] ml-1" title="Contatto in rubrica">💬</span>}
                                   </td>
                                   <td className="px-3 py-2 text-gray-600 font-semibold">{row.giorno} <span className="text-gray-400 ml-1">({row.ora})</span></td>
                                   <td className="px-3 py-2 font-bold cursor-pointer" onClick={() => startEditingClass(row)}>
