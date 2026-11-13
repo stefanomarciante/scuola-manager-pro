@@ -69,7 +69,6 @@ export default function DashboardPage({ user, userRole }) {
     const classeClean = classeStr.toUpperCase().replace(/\s+/g, ' '); 
     const classeNoSpace = classeStr.toUpperCase().replace(/\s+/g, '');
 
-    // Intercetta stringhe di Potenziamento e Disposizione per assegnare il plesso
     if (classeClean.includes('POT') || classeClean.includes('DISP')) {
         if (classeClean.includes('LICODIA')) return "SANTA MARIA DI LICODIA";
         if (classeClean.includes('PEDARA')) return "PEDARA";
@@ -120,6 +119,18 @@ export default function DashboardPage({ user, userRole }) {
     const activeDb = getFilteredScheduleDB();
     const allTeachers = Array.from(new Set(activeDb.map(s => s.docente).filter(Boolean)));
     return allTeachers.filter(t => t.includes(clean)).sort();
+  };
+
+  // Funzioni utilitarie per il tempo (Assembly)
+  const timeToMins = (t) => {
+    if (!t) return 0;
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const minsToTime = (m) => {
+    const h = Math.floor(m / 60).toString().padStart(2, '0');
+    const mins = (m % 60).toString().padStart(2, '0');
+    return `${h}:${mins}`;
   };
 
   // === INTESTAZIONE STAMPA CONDIVISA ===
@@ -654,15 +665,12 @@ export default function DashboardPage({ user, userRole }) {
     const testoMessaggio = `*Sostituzione - IPSSAT Chinnici*\n\nGentile Prof. ${log.docente_sostituto},\nGiorno: ${log.giorno} (${log.dataISO})\nOra: ${log.ora}\nClasse: ${log.classe} (Plesso: ${log.plesso})\nSostituisce: ${log.docente_assente}\nModalità: ${log.modalita}\n\nFirma: ${log.responsabile_firma}`;
     const contatti = contactsDB[log.docente_sostituto] || {};
     
-    // Estrae esclusivamente i caratteri numerici, eliminando +, spazi e trattini
     let telefono = contatti.telefono ? String(contatti.telefono).replace(/\D/g, '') : ''; 
     const email = contatti.email || '';
 
     if (metodo === 'wa') {
         if (telefono) {
-           // Rimuove eventuali "00" iniziali (es. 0039)
            if (telefono.startsWith('0039')) telefono = telefono.substring(2);
-           // Assicura il prefisso italiano 39 senza inserire il simbolo +
            if (!telefono.startsWith('39')) telefono = '39' + telefono;
            
            window.open(`https://wa.me/${telefono}?text=${encodeURIComponent(testoMessaggio)}`, '_blank');
@@ -676,19 +684,15 @@ export default function DashboardPage({ user, userRole }) {
     }
   };
 
-  // === LOGICA ASSEMBLEE CON CALCOLO ORE E AGGREGAZIONE ===
-  const currentAssembly = assembliesDB.find(a => a.dataISO === assemblyDateStr) || { ore: [], docenti: [] };
-  const assemblyHours = currentAssembly.ore;
-  const assemblyTeachersList = currentAssembly.docenti; 
+  // === LOGICA ASSEMBLEE CON CALCOLO MATEMATICO ORE/MINUTI ===
+  const currentAssembly = assembliesDB.find(a => a.dataISO === assemblyDateStr) || { startTime: '08:00', endTime: '11:00', docenti: [] };
+  const assemblyStartTime = currentAssembly.startTime || '08:00';
+  const assemblyEndTime = currentAssembly.endTime || '11:00';
+  const assemblyTeachersList = currentAssembly.docenti || []; 
 
-  const updateAssembly = (dataISO, ore, docenti) => {
+  const updateAssembly = (dataISO, startT, endT, docenti) => {
     const otherAssemblies = assembliesDB.filter(a => a.dataISO !== dataISO);
-    syncAssemblies([...otherAssemblies, { dataISO, ore, docenti }]);
-  };
-
-  const toggleAssemblyHour = (orarioStr) => {
-    const newOre = assemblyHours.includes(orarioStr) ? assemblyHours.filter(h => h !== orarioStr) : [...assemblyHours, orarioStr];
-    updateAssembly(assemblyDateStr, newOre, assemblyTeachersList);
+    syncAssemblies([...otherAssemblies, { dataISO, startTime: startT, endTime: endT, docenti }]);
   };
 
   const addAssemblyTeacher = () => {
@@ -704,18 +708,17 @@ export default function DashboardPage({ user, userRole }) {
     }
 
     const newDocenti = assemblyTeachersList.includes(cleanName) ? assemblyTeachersList : [...assemblyTeachersList, cleanName];
-    updateAssembly(assemblyDateStr, assemblyHours, newDocenti);
+    updateAssembly(assemblyDateStr, assemblyStartTime, assemblyEndTime, newDocenti);
     setAssemblyTeacherInput('');
   };
 
   const getAssemblyImpact = () => {
     const todaySlots = getFilteredScheduleDB().filter(s => s.giorno === assemblyDay);
-
-    const affectedSlots = todaySlots.filter(s =>
-        assemblyTeachersList.some(t => s.docente.includes(t)) &&
-        assemblyHours.includes(s.ora) &&
-        s.tipologia !== 'A DISPOSIZIONE' && s.tipologia !== 'POTENZIAMENTO'
-    );
+    
+    const aStartMins = timeToMins(assemblyStartTime);
+    let aEndMins = timeToMins(assemblyEndTime);
+    // Abbuono 20 minuti: se l'assemblea finisce alle 14:00, la consideriamo fino alle 14:20
+    if (assemblyEndTime === '14:00') aEndMins = 860; 
 
     const estraiAnima = (testo) => {
         let pulito = testo.toUpperCase().replace(/[\s\.\-_]/g, '').replace(/SOSTEGNO|SOST/g, '');
@@ -723,57 +726,134 @@ export default function DashboardPage({ user, userRole }) {
         return match ? match[1] : pulito;
     };
 
-    const slotsConStato = affectedSlots.map(slot => {
-        const coTeachers = todaySlots.filter(s =>
-            classiCorrispondono(s.classe, slot.classe) &&
-            s.ora === slot.ora &&
-            s.id !== slot.id &&
-            !assemblyTeachersList.some(t => s.docente.includes(t))
-        );
-
-        return { ...slot, haCopertura: coTeachers.length > 0, coTeachersNomi: coTeachers.map(c => c.docente).join(', ') };
-    });
-
     const gruppiClasse = {};
-    slotsConStato.forEach(slot => {
+    
+    // Raggruppamento dell'intero orario giornaliero della classe
+    todaySlots.forEach(slot => {
+        if (slot.tipologia === 'A DISPOSIZIONE' || slot.tipologia === 'POTENZIAMENTO') return;
         const classeBase = estraiAnima(slot.classe);
         if (!gruppiClasse[classeBase]) {
-            gruppiClasse[classeBase] = { classeOriginale: slot.classe, plesso: slot.plesso, docentiAderenti: new Set(), oreCoinvolte: new Set(), oreScoperte: new Set(), coperture: {} };
+            gruppiClasse[classeBase] = { 
+                classeOriginale: slot.classe, 
+                plesso: slot.plesso, 
+                allSlots: [],
+                docentiAderenti: new Set(),
+                coperture: {}
+            };
         }
-        gruppiClasse[classeBase].docentiAderenti.add(slot.docente);
-        gruppiClasse[classeBase].oreCoinvolte.add(slot.ora);
-        
-        if (slot.haCopertura) {
-            if (!gruppiClasse[classeBase].coperture[slot.ora]) gruppiClasse[classeBase].coperture[slot.ora] = [];
-            gruppiClasse[classeBase].coperture[slot.ora].push(slot.coTeachersNomi);
-        } else {
-            gruppiClasse[classeBase].oreScoperte.add(slot.ora);
-        }
+        gruppiClasse[classeBase].allSlots.push(slot);
     });
 
     const reportFinale = [];
+
     Object.values(gruppiClasse).forEach(gruppo => {
-        const oreScoperteArray = Array.from(gruppo.oreScoperte).sort();
-        let status = ''; let note = '';
+        const classSlots = gruppo.allSlots;
+        let classStartOfDay = 1440;
+        let classEndOfDay = 0;
+        
+        const uncoveredIntervals = [];
 
-        if (oreScoperteArray.length === 0) {
-            status = 'REGOLARE';
-            const copertureTesto = Object.entries(gruppo.coperture).map(([ora, docenti]) => `${ora} coperta da ${docenti[0]}`).join('; ');
-            note = `Orario regolare. Rimane a scuola. (${copertureTesto})`;
-        } else {
-            const firstHourStr = oreScoperteArray[0];
-            const lastHourStr = oreScoperteArray[oreScoperteArray.length - 1];
+        // Identifica orari e coperture per ogni singolo slot della giornata
+        classSlots.forEach(slot => {
+            const [sStartStr, sEndStr] = slot.ora.split('-');
+            const sStart = timeToMins(sStartStr);
+            const sEnd = timeToMins(sEndStr);
+            
+            if (sStart < classStartOfDay) classStartOfDay = sStart;
+            if (sEnd > classEndOfDay) classEndOfDay = sEnd;
+            
+            // Il docente partecipa e c'è intersezione reale tra la sua lezione e l'assemblea?
+            const teacherAderisce = assemblyTeachersList.some(t => slot.docente.includes(t));
+            const isOverlapping = teacherAderisce && sStart < aEndMins && sEnd > aStartMins;
+            
+            if (isOverlapping) {
+                gruppo.docentiAderenti.add(slot.docente);
+                
+                // Ricerca compresenza/sostegno NON in assemblea per la medesima ora
+                const coTeachers = classSlots.filter(c => 
+                    c.id !== slot.id && 
+                    c.ora === slot.ora && 
+                    !assemblyTeachersList.some(t => c.docente.includes(t))
+                );
+                
+                if (coTeachers.length > 0) {
+                    if (!gruppo.coperture[slot.ora]) gruppo.coperture[slot.ora] = [];
+                    gruppo.coperture[slot.ora].push(coTeachers.map(c => c.docente).join(', '));
+                } else {
+                    // Salva la porzione ESATTA di minuti scoperti
+                    uncoveredIntervals.push({
+                        start: Math.max(sStart, aStartMins),
+                        end: Math.min(sEnd, aEndMins)
+                    });
+                }
+            }
+        });
 
-            if (firstHourStr.startsWith('08:00') || firstHourStr.startsWith('08:50')) {
-                const endTime = lastHourStr.split('-')[1];
-                status = 'INGRESSO POSTICIPATO'; note = `Ingresso posticipato alle ore ${endTime} (Avviso Famiglie)`;
+        // Se nessuno in questa classe è andato in assemblea, salta il resoconto
+        if (gruppo.docentiAderenti.size === 0) return;
+
+        // Fonde gli intervalli scoperti che si toccano (es. 08:00-09:40 + 09:40-11:00 = 08:00-11:00)
+        uncoveredIntervals.sort((a,b) => a.start - b.start);
+        let merged = [];
+        for (let inter of uncoveredIntervals) {
+            if (merged.length === 0) {
+                merged.push({...inter});
             } else {
-                const startTime = firstHourStr.split('-')[0];
-                status = 'USCITA ANTICIPATA'; note = `Uscita anticipata alle ore ${startTime} (Avviso Famiglie)`;
+                let last = merged[merged.length-1];
+                if (inter.start <= last.end) {
+                    last.end = Math.max(last.end, inter.end);
+                } else {
+                    merged.push({...inter});
+                }
             }
         }
-        reportFinale.push({ classe: gruppo.classeOriginale, plesso: gruppo.plesso, ora: Array.from(gruppo.oreCoinvolte).sort().join(', '), docente: Array.from(gruppo.docentiAderenti).join(', '), status, note });
+
+        let status = '';
+        let note = '';
+        
+        if (merged.length === 0) {
+            status = 'REGOLARE';
+            const copertureTesto = Object.entries(gruppo.coperture).map(([ora, docenti]) => `${ora} coperta da ${docenti[0]}`).join('; ');
+            note = `Orario regolare. Rimane a scuola. ${copertureTesto ? '(' + copertureTesto + ')' : ''}`;
+        } else {
+            let ingresso = null;
+            let uscita = null;
+            
+            // Cerca se l'intervallo scoperto tocca il primo o l'ultimo minuto di lezione della classe
+            let firstBlock = merged.find(b => b.start <= classStartOfDay);
+            if (firstBlock) ingresso = firstBlock.end;
+            
+            let lastBlock = merged.find(b => b.end >= classEndOfDay);
+            if (lastBlock) uscita = lastBlock.start;
+
+            if (ingresso >= classEndOfDay) {
+                status = 'SOSPENSIONE LEZIONI';
+                note = 'L\'intera giornata è coperta da assemblea. Sospensione lezioni (Avviso Famiglie)';
+            } else if (ingresso && uscita && ingresso > classStartOfDay && uscita < classEndOfDay) {
+                status = 'INGRESSO E USCITA';
+                note = `Ingresso posticipato ore ${minsToTime(ingresso)}, Uscita anticipata ore ${minsToTime(uscita)} (Avviso Famiglie)`;
+            } else if (ingresso && ingresso > classStartOfDay) {
+                status = 'INGRESSO POSTICIPATO';
+                note = `Ingresso posticipato alle ore ${minsToTime(ingresso)} (Avviso Famiglie)`;
+            } else if (uscita && uscita < classEndOfDay) {
+                status = 'USCITA ANTICIPATA';
+                note = `Uscita anticipata alle ore ${minsToTime(uscita)} (Avviso Famiglie)`;
+            } else {
+                status = 'BUCO ORARIO';
+                note = `Ore scoperte centrali: ${merged.map(b => `${minsToTime(b.start)}-${minsToTime(b.end)}`).join(', ')}`;
+            }
+        }
+        
+        reportFinale.push({ 
+            classe: gruppo.classeOriginale, 
+            plesso: gruppo.plesso, 
+            ora: merged.map(b => `${minsToTime(b.start)}-${minsToTime(b.end)}`).join(', '),
+            docente: Array.from(gruppo.docentiAderenti).join(', '), 
+            status, 
+            note 
+        });
     });
+    
     return reportFinale.sort((a,b) => a.classe.localeCompare(b.classe));
   };
 
@@ -843,7 +923,6 @@ export default function DashboardPage({ user, userRole }) {
                 return;
             }
             
-            // Sostituzione Indipendente: Elimina solo il vecchio orario del ruolo che sto caricando
             const dbSenzaRuoloVecchio = scheduleDB.filter(s => s.ruolo !== ruolo);
             const newCombinedDb = [...dbSenzaRuoloVecchio, ...extractedSlots];
             saveDatabaseToCloud(newCombinedDb);
@@ -1324,13 +1403,21 @@ export default function DashboardPage({ user, userRole }) {
            <div className="grid lg:grid-cols-3 gap-6">
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 lg:col-span-1 print:hidden">
                  <h3 className="text-lg font-bold text-gray-800 mb-4 border-b border-gray-100 pb-2">Dati Assemblea</h3>
-                 <input type="date" value={assemblyDateStr} onChange={(e) => setAssemblyDateStr(e.target.value)} className="w-full p-2 border border-gray-300 rounded mb-4 focus:outline-none focus:border-teal-500" />
                  
-                 <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Seleziona Ore (Durata)</label>
-                 <div className="flex flex-wrap gap-1.5 mb-6">
-                    {FASCIE_ORARIE_STANDARD.map(f => (
-                       <button key={f.orario} onClick={() => toggleAssemblyHour(f.orario)} className={`px-3 py-1.5 text-xs font-bold rounded border ${assemblyHours.includes(f.orario) ? 'bg-teal-500 text-white border-teal-500' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}>{f.label}</button>
-                    ))}
+                 <div className="mb-4">
+                     <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Data Assemblea</label>
+                     <input type="date" value={assemblyDateStr} onChange={(e) => setAssemblyDateStr(e.target.value)} className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:border-teal-500" />
+                 </div>
+                 
+                 <div className="flex gap-4 mb-6">
+                    <div className="flex-1">
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Ora Inizio</label>
+                        <input type="time" value={assemblyStartTime} onChange={(e) => updateAssembly(assemblyDateStr, e.target.value, assemblyEndTime, assemblyTeachersList)} className="w-full p-2 border border-gray-300 rounded font-bold focus:outline-none focus:border-teal-500" />
+                    </div>
+                    <div className="flex-1">
+                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Ora Fine</label>
+                        <input type="time" value={assemblyEndTime} onChange={(e) => updateAssembly(assemblyDateStr, assemblyStartTime, e.target.value, assemblyTeachersList)} className="w-full p-2 border border-gray-300 rounded font-bold focus:outline-none focus:border-teal-500" />
+                    </div>
                  </div>
                  
                  <div className="bg-gray-50 p-3 rounded border border-gray-200 mb-4">
@@ -1353,7 +1440,7 @@ export default function DashboardPage({ user, userRole }) {
                  <div className="flex flex-wrap gap-2">
                     {filteredAssemblyTeachers.map(t => (
                        <span key={t} className="bg-white border border-gray-200 shadow-sm px-2 py-1.5 text-xs font-bold rounded flex items-center gap-2">
-                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyHours, assembliesDB.find(a => a.dataISO === assemblyDateStr).docenti.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
+                          {t} <button onClick={() => updateAssembly(assemblyDateStr, assemblyStartTime, assemblyEndTime, assembliesDB.find(a => a.dataISO === assemblyDateStr).docenti.filter(x => x !== t))} className="text-gray-400 hover:text-red-500 bg-gray-100 px-1 rounded">&times;</button>
                        </span>
                     ))}
                  </div>
@@ -1371,7 +1458,7 @@ export default function DashboardPage({ user, userRole }) {
                  {/* DISPOSITIVO LEGALE PER CIRCOLARE ASSEMBLEA */}
                  <div className="hidden print:block mb-8 text-justify text-sm">
                     <h2 className="text-lg font-bold uppercase text-center mb-4">IL DIRIGENTE SCOLASTICO</h2>
-                    <p className="mb-2"><strong>VISTA</strong> l’indizione dell’assemblea sindacale territoriale per il giorno {formatDataEstesa(assemblyDateStr)};</p>
+                    <p className="mb-2"><strong>VISTA</strong> l’indizione dell’assemblea sindacale territoriale per il giorno {formatDataEstesa(assemblyDateStr)} dalle ore {assemblyStartTime} alle ore {assemblyEndTime};</p>
                     <p className="mb-2"><strong>VISTE</strong> le dichiarazioni di adesione del personale docente e valutato l’impatto sull'orario delle lezioni;</p>
                     <p className="mb-2"><strong>RITENUTO</strong> necessario garantire la sicurezza e la vigilanza degli alunni, nonché informare tempestivamente le famiglie circa le variazioni di orario;</p>
                     <h3 className="text-md font-bold text-center my-4">DISPONE</h3>
@@ -1388,7 +1475,7 @@ export default function DashboardPage({ user, userRole }) {
                              <td className="p-2 font-bold text-base">{slot.classe}</td>
                              <td className="p-2 font-semibold text-gray-700 print:hidden text-xs">{slot.ora}</td>
                              <td className="p-2 print:hidden">
-                                <span className={`text-xs font-bold px-2 py-1.5 rounded border ${slot.status === 'REGOLARE' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{slot.note}</span>
+                                <span className={`text-xs font-bold px-2 py-1.5 rounded border ${slot.status === 'REGOLARE' ? 'bg-green-50 text-green-700 border-green-200' : slot.status.includes('VARIAZIONI') ? 'bg-orange-50 text-orange-700 border-orange-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{slot.note}</span>
                              </td>
                              <td className="p-2 font-bold text-black hidden print:table-cell">
                                 {slot.status === 'REGOLARE' ? 'ORARIO REGOLARE' : slot.note}
